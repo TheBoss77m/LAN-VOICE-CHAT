@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>محادثة الشبكة المحلية</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ============ شاشة الدخول ============ -->
+  <section id="auth-screen" class="screen">
+    <div class="auth-card">
+      <div class="brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <h1>محادثة الشبكة المحلية</h1>
+      </div>
+      <p class="brand-sub">تواصل صوتًا ونصًا مع كل من هو متصل على نفس الشبكة</p>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="login">دخول</button>
+        <button class="tab-btn" data-tab="register">حساب جديد</button>
+      </div>
+
+      <form id="login-form" class="auth-form">
+        <label>اسم المستخدم
+          <input type="text" name="username" required autocomplete="username" />
+        </label>
+        <label>كلمة المرور
+          <input type="password" name="password" required autocomplete="current-password" />
+        </label>
+        <button type="submit" class="btn-primary">دخول</button>
+        <p class="form-error" id="login-error"></p>
+      </form>
+
+      <form id="register-form" class="auth-form hidden">
+        <label>اسم المستخدم
+          <input type="text" name="username" minlength="2" maxlength="30" required />
+        </label>
+        <label>كلمة المرور
+          <input type="password" name="password" minlength="4" required />
+        </label>
+        <button type="submit" class="btn-primary">إنشاء الحساب والدخول</button>
+        <p class="form-error" id="register-error"></p>
+      </form>
+
+    </div>
+  </section>
+
+  <!-- ============ الشاشة الرئيسية ============ -->
+  <section id="app-screen" class="screen hidden">
+    <aside class="sidebar">
+      <div class="me-bar">
+        <span class="status-dot online"></span>
+        <span id="me-username">--</span>
+        <button id="logout-btn" class="btn-ghost small">خروج</button>
+      </div>
+
+      <div class="sidebar-section-header">
+        <span>المستخدمون</span>
+      </div>
+      <div class="users-list" id="users-list"></div>
+
+      <div class="sidebar-section-header">
+        <span>المجموعات</span>
+        <button type="button" id="new-group-btn" class="btn-ghost tiny" title="مجموعة جديدة">+ جديدة</button>
+      </div>
+      <div class="users-list" id="groups-list"></div>
+    </aside>
+
+    <main class="chat-pane">
+      <div id="no-chat-selected" class="empty-state">
+        <p>اختر محادثة من القائمة لبدء الدردشة</p>
+      </div>
+
+      <div id="chat-active" class="hidden chat-active">
+        <header class="chat-header">
+          <div class="peer-info">
+            <button type="button" id="back-to-list-btn" class="back-to-list" aria-label="رجوع">→</button>
+            <span class="status-dot" id="peer-status-dot"></span>
+            <span id="peer-username">--</span>
+            <span id="peer-subtitle" class="peer-subtitle hidden"></span>
+          </div>
+          <button id="call-btn" class="btn-call" title="مكالمة صوتية">📞</button>
+        </header>
+
+        <div class="messages" id="messages"></div>
+
+        <form id="message-form" class="composer">
+          <input type="text" id="message-input" placeholder="اكتب رسالة..." autocomplete="off" />
+          <button type="submit" class="btn-primary small">إرسال</button>
+        </form>
+      </div>
+    </main>
+
+    <!-- شريط سفلي يظهر أثناء وجود مكالمة جماعية نشطة، بدون حجب الشاشة -->
+    <div id="group-call-bar" class="group-call-bar hidden">
+      <div class="gcb-info">
+        <span class="gcb-live-dot"></span>
+        <span id="gcb-title">مكالمة جماعية</span>
+        <span id="gcb-participants" class="gcb-participants"></span>
+      </div>
+      <div class="gcb-actions">
+        <button type="button" id="gcb-mute-btn" class="btn-ghost small">كتم</button>
+        <button type="button" id="gcb-leave-btn" class="btn-reject small">مغادرة</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ نافذة إنشاء مجموعة ============ -->
+  <section id="new-group-modal" class="call-overlay hidden">
+    <div class="call-card modal-card">
+      <h2 class="modal-title">مجموعة جديدة</h2>
+      <label class="modal-label">اسم المجموعة
+        <input type="text" id="new-group-name" maxlength="50" placeholder="مثال: فريق المشروع" />
+      </label>
+      <p class="modal-label" style="margin-bottom:6px;">اختر الأعضاء</p>
+      <div id="new-group-members" class="member-checklist"></div>
+      <div class="call-actions" style="margin-top:18px;">
+        <button type="button" id="new-group-cancel-btn" class="btn-reject">إلغاء</button>
+        <button type="button" id="new-group-create-btn" class="btn-accept">إنشاء</button>
+      </div>
+      <p class="form-error" id="new-group-error"></p>
+    </div>
+  </section>
+
+  <!-- ============ بانر دعوة لمكالمة جماعية ============ -->
+  <div id="group-invite-banner" class="group-invite-banner hidden">
+    <span id="group-invite-text"></span>
+    <div class="gib-actions">
+      <button type="button" id="group-invite-join-btn" class="btn-accept small">انضمام</button>
+      <button type="button" id="group-invite-dismiss-btn" class="btn-ghost small">تجاهل</button>
+    </div>
+  </div>
+
+  <!-- ============ طبقة المكالمة الثنائية ============ -->
+  <section id="call-overlay" class="call-overlay hidden">
+    <div class="call-card">
+      <div class="call-avatar" aria-hidden="true">🎙️</div>
+      <p class="call-with">مكالمة مع <strong id="call-peer-name">--</strong></p>
+      <p class="call-status" id="call-status-text">جارٍ الاتصال...</p>
+
+      <div class="call-actions">
+        <button id="call-accept-btn" class="btn-accept hidden">قبول</button>
+        <button id="call-reject-btn" class="btn-reject hidden">رفض</button>
+        <button id="call-end-btn" class="btn-reject hidden">إنهاء المكالمة</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="remote-audios-container" style="display:none;"></div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
