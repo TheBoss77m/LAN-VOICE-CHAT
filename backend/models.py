@@ -64,3 +64,16 @@ class GroupMessageOut(BaseModel):
     sender_id: int
     message: str
     timestamp: str
+
+
+class CallOut(BaseModel):
+    id: int
+    caller_id: int
+    receiver_id: int
+    caller_name: Optional[str] = None
+    receiver_name: Optional[str] = None
+    call_type: str = "voice"
+    start_time: str
+    end_time: Optional[str] = None
+    status: str
+

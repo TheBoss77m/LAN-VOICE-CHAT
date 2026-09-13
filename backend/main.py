@@ -24,7 +24,7 @@ import database as db
 import auth
 from models import (
     RegisterRequest, LoginRequest, AuthResponse, UserOut, MessageOut,
-    CreateGroupRequest, GroupOut, GroupMemberOut, GroupMessageOut,
+    CreateGroupRequest, GroupOut, GroupMemberOut, GroupMessageOut, CallOut,
 )
 from ws_routes import router as ws_router
 from discovery import start_discovery_responder, get_local_ip
@@ -150,6 +150,11 @@ async def get_messages(peer_id: int, current_user: dict = Depends(get_current_us
 @app.get("/api/me", response_model=UserOut)
 async def me(current_user: dict = Depends(get_current_user)):
     return current_user
+
+
+@app.get("/api/calls", response_model=List[CallOut])
+async def get_calls(current_user: dict = Depends(get_current_user)):
+    return await db.get_recent_calls(current_user["id"])
 
 
 # ---------------------------------------------------------------------------

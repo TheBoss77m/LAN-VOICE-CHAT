@@ -61,6 +61,7 @@ async def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             caller_id INTEGER NOT NULL REFERENCES users(id),
             receiver_id INTEGER NOT NULL REFERENCES users(id),
+            call_type TEXT NOT NULL DEFAULT 'voice',
             start_time TEXT NOT NULL,
             end_time TEXT,
             status TEXT NOT NULL DEFAULT 'ringing'
@@ -111,6 +112,13 @@ async def init_db() -> None:
         """
     )
     await _db.commit()
+
+    # فحص توافق قواعد البيانات الموجودة مسبقًا لإضافة عمود call_type إن لم يكن موجودًا
+    async with _db.execute("PRAGMA table_info(calls)") as cur:
+        columns = [row[1] for row in await cur.fetchall()]
+        if columns and "call_type" not in columns:
+            await _db.execute("ALTER TABLE calls ADD COLUMN call_type TEXT NOT NULL DEFAULT 'voice'")
+            await _db.commit()
 
 
 async def close_db() -> None:
@@ -214,10 +222,10 @@ async def get_message_history(user_a: int, user_b: int, limit: int = 200) -> Lis
 # Calls (مكالمة ثنائية)
 # ---------------------------------------------------------------------------
 
-async def create_call(caller_id: int, receiver_id: int) -> int:
+async def create_call(caller_id: int, receiver_id: int, call_type: str = "voice") -> int:
     cursor = await _conn().execute(
-        "INSERT INTO calls (caller_id, receiver_id, start_time, status) VALUES (?, ?, ?, 'ringing')",
-        (caller_id, receiver_id, _now()),
+        "INSERT INTO calls (caller_id, receiver_id, call_type, start_time, status) VALUES (?, ?, ?, ?, 'ringing')",
+        (caller_id, receiver_id, call_type, _now()),
     )
     await _conn().commit()
     return cursor.lastrowid
@@ -231,6 +239,24 @@ async def update_call_status(call_id: int, status: str, ended: bool = False) -> 
     else:
         await _conn().execute("UPDATE calls SET status = ? WHERE id = ?", (status, call_id))
     await _conn().commit()
+
+
+async def get_recent_calls(user_id: int, limit: int = 30) -> List[Dict[str, Any]]:
+    async with _conn().execute(
+        """
+        SELECT c.*,
+               u1.username AS caller_name,
+               u2.username AS receiver_name
+        FROM calls c
+        JOIN users u1 ON u1.id = c.caller_id
+        JOIN users u2 ON u2.id = c.receiver_id
+        WHERE c.caller_id = ? OR c.receiver_id = ?
+        ORDER BY c.id DESC LIMIT ?
+        """,
+        (user_id, user_id, limit),
+    ) as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

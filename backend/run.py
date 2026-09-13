@@ -22,14 +22,14 @@ def main() -> None:
         sys.exit(1)
 
     local_ip = get_local_ip()
-    print("=" * 60)
-    print("  LAN Voice Chat — HTTPS")
-    print(f"  من نفس الجهاز:      https://127.0.0.1:{PORT}")
-    print(f"  من أجهزة الشبكة:    https://{local_ip}:{PORT}")
-    print("  ملاحظة: المتصفح سيُظهر تحذير 'اتصال غير آمن' لأن الشهادة")
-    print("  ذاتية التوقيع — هذا متوقع، اضغط 'متابعة/Advanced' لتجاوزه")
-    print("  (مرة واحدة فقط لكل جهاز/متصفح).")
-    print("=" * 60)
+    print("=" * 60, flush=True)
+    print("  LAN Voice + Video Chat — HTTPS", flush=True)
+    print(f"  من نفس الجهاز:      https://127.0.0.1:{PORT}", flush=True)
+    print(f"  من أجهزة الشبكة:    https://{local_ip}:{PORT}", flush=True)
+    print("  ملاحظة: المتصفح سيُظهر تحذير 'اتصال غير آمن' لأن الشهادة", flush=True)
+    print("  ذاتية التوقيع — هذا متوقع، اضغط 'متابعة/Advanced' لتجاوزه", flush=True)
+    print("  (مرة واحدة فقط لكل جهاز/متصفح).", flush=True)
+    print("=" * 60, flush=True)
 
     uvicorn.run(
         "main:app",

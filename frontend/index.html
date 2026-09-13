@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar" dir="rtl" data-theme="dark">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>محادثة الشبكة المحلية</title>
-<link rel="stylesheet" href="/static/style.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LAN Voice & Video Chat — اتصال شبكة محلية</title>
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
 
@@ -12,88 +12,131 @@
   <section id="auth-screen" class="screen">
     <div class="auth-card">
       <div class="brand">
-        <span class="brand-dot" aria-hidden="true"></span>
-        <h1>محادثة الشبكة المحلية</h1>
+        <span class="brand-pulse" aria-hidden="true"></span>
+        <div>
+          <h1>LAN Connect</h1>
+          <span class="brand-tag">Voice & Video Network</span>
+        </div>
       </div>
-      <p class="brand-sub">تواصل صوتًا ونصًا مع كل من هو متصل على نفس الشبكة</p>
+      <p class="brand-sub">تواصل صوتي ومرئي فائق السرعة عبر الشبكة المحلية (LAN) دون الحاجة للإنترنت</p>
 
       <div class="tabs">
-        <button class="tab-btn active" data-tab="login">دخول</button>
-        <button class="tab-btn" data-tab="register">حساب جديد</button>
+        <button class="tab-btn active" data-tab="login">تسجيل الدخول</button>
+        <button class="tab-btn" data-tab="register">إنشاء حساب جديد</button>
       </div>
 
       <form id="login-form" class="auth-form">
-        <label>اسم المستخدم
-          <input type="text" name="username" required autocomplete="username" />
+        <label>
+          <span>اسم المستخدم</span>
+          <input type="text" name="username" required autocomplete="username" placeholder="أدخل اسمك أو اسم الجهاز" />
         </label>
-        <label>كلمة المرور
-          <input type="password" name="password" required autocomplete="current-password" />
+        <label>
+          <span>كلمة المرور</span>
+          <input type="password" name="password" required autocomplete="current-password" placeholder="••••••••" />
         </label>
-        <button type="submit" class="btn-primary">دخول</button>
+        <button type="submit" class="btn-primary">دخول إلى الشبكة</button>
         <p class="form-error" id="login-error"></p>
       </form>
 
       <form id="register-form" class="auth-form hidden">
-        <label>اسم المستخدم
-          <input type="text" name="username" minlength="2" maxlength="30" required />
+        <label>
+          <span>اسم المستخدم</span>
+          <input type="text" name="username" minlength="2" maxlength="30" required placeholder="مثال: Ahmed_PC" />
         </label>
-        <label>كلمة المرور
-          <input type="password" name="password" minlength="4" required />
+        <label>
+          <span>كلمة المرور</span>
+          <input type="password" name="password" minlength="4" required placeholder="4 أحرف أو أرقام على الأقل" />
         </label>
-        <button type="submit" class="btn-primary">إنشاء الحساب والدخول</button>
+        <button type="submit" class="btn-primary">إنشاء الحساب والبدء</button>
         <p class="form-error" id="register-error"></p>
       </form>
-
     </div>
   </section>
 
   <!-- ============ الشاشة الرئيسية ============ -->
   <section id="app-screen" class="screen hidden">
-    <aside class="sidebar">
-      <div class="me-bar">
-        <span class="status-dot online"></span>
-        <span id="me-username">--</span>
-        <button id="logout-btn" class="btn-ghost small">خروج</button>
+    <!-- الشريط العلوي الشامل -->
+    <header class="app-topbar">
+      <div class="topbar-brand">
+        <span class="brand-pulse sm" aria-hidden="true"></span>
+        <span class="topbar-title">LAN Voice + Video</span>
+        <span class="lan-badge" id="lan-status-badge">● متصل بالشبكة المحلية</span>
       </div>
-
-      <div class="sidebar-section-header">
-        <span>المستخدمون</span>
+      <div class="topbar-actions">
+        <button type="button" id="theme-toggle-btn" class="btn-icon" title="تبديل الوضع (ليلي / نهاري)">
+          <span id="theme-icon">🌙</span>
+        </button>
+        <div class="me-chip">
+          <span class="user-avatar-sm" id="me-avatar-letter">A</span>
+          <span id="me-username">--</span>
+        </div>
+        <button id="logout-btn" class="btn-ghost small" title="تسجيل الخروج">خروج</button>
       </div>
-      <div class="users-list" id="users-list"></div>
+    </header>
 
-      <div class="sidebar-section-header">
-        <span>المجموعات</span>
-        <button type="button" id="new-group-btn" class="btn-ghost tiny" title="مجموعة جديدة">+ جديدة</button>
-      </div>
-      <div class="users-list" id="groups-list"></div>
-    </aside>
+    <div class="app-layout">
+      <!-- القائمة الجانبية: الأجهزة والمجموعات -->
+      <aside class="sidebar">
+        <div class="sidebar-section-header">
+          <span>الأجهزة المتصلة (LAN)</span>
+          <span class="count-pill" id="online-users-count">0</span>
+        </div>
+        <div class="users-list" id="users-list">
+          <div class="list-placeholder">جارٍ البحث عن أجهزة...</div>
+        </div>
 
-    <main class="chat-pane">
-      <div id="no-chat-selected" class="empty-state">
-        <p>اختر محادثة من القائمة لبدء الدردشة</p>
-      </div>
+        <div class="sidebar-section-header">
+          <span>المجموعات</span>
+          <button type="button" id="new-group-btn" class="btn-ghost tiny" title="إنشاء مجموعة جديدة">+ جديدة</button>
+        </div>
+        <div class="users-list" id="groups-list"></div>
+      </aside>
 
-      <div id="chat-active" class="hidden chat-active">
-        <header class="chat-header">
-          <div class="peer-info">
-            <button type="button" id="back-to-list-btn" class="back-to-list" aria-label="رجوع">→</button>
-            <span class="status-dot" id="peer-status-dot"></span>
-            <span id="peer-username">--</span>
-            <span id="peer-subtitle" class="peer-subtitle hidden"></span>
-          </div>
-          <button id="call-btn" class="btn-call" title="مكالمة صوتية">📞</button>
-        </header>
+      <!-- منطقة الدردشة الرئيسية -->
+      <main class="chat-pane">
+        <div id="no-chat-selected" class="empty-state">
+          <div class="empty-icon">📡</div>
+          <h3>اتصال الشبكة المحلية جاهز</h3>
+          <p>اختر جهازاً من القائمة الجانبية لبدء محادثة نصية، مكالمة صوتية 📞، أو مكالمة فيديو 🎥</p>
+        </div>
 
-        <div class="messages" id="messages"></div>
+        <div id="chat-active" class="hidden chat-active">
+          <header class="chat-header">
+            <div class="peer-info">
+              <button type="button" id="back-to-list-btn" class="back-to-list" aria-label="رجوع">←</button>
+              <div class="user-avatar" id="peer-avatar">👤</div>
+              <div>
+                <div class="peer-name-row">
+                  <span id="peer-username">--</span>
+                  <span class="status-indicator" id="peer-status-dot"></span>
+                </div>
+                <span id="peer-subtitle" class="peer-subtitle">متصل بالشبكة</span>
+              </div>
+            </div>
 
-        <form id="message-form" class="composer">
-          <input type="text" id="message-input" placeholder="اكتب رسالة..." autocomplete="off" />
-          <button type="submit" class="btn-primary small">إرسال</button>
-        </form>
-      </div>
-    </main>
+            <div class="chat-actions">
+              <button id="voice-call-btn" class="btn-action voice" title="بدء مكالمة صوتية">
+                <span>📞</span>
+                <span class="btn-label">صوت</span>
+              </button>
+              <button id="video-call-btn" class="btn-action video" title="بدء مكالمة فيديو">
+                <span>🎥</span>
+                <span class="btn-label">فيديو</span>
+              </button>
+            </div>
+          </header>
 
-    <!-- شريط سفلي يظهر أثناء وجود مكالمة جماعية نشطة، بدون حجب الشاشة -->
+          <div class="messages" id="messages"></div>
+
+          <form id="message-form" class="composer">
+            <input type="text" id="message-input" placeholder="اكتب رسالة على الشبكة المحلية..." autocomplete="off" />
+            <button type="submit" class="btn-primary small">إرسال</button>
+          </form>
+        </div>
+      </main>
+    </div>
+
+    <!-- شريط سفلي للمكالمة الجماعية (Mesh) -->
     <div id="group-call-bar" class="group-call-bar hidden">
       <div class="gcb-info">
         <span class="gcb-live-dot"></span>
@@ -107,12 +150,129 @@
     </div>
   </section>
 
-  <!-- ============ نافذة إنشاء مجموعة ============ -->
+  <!-- ============ واجهة المكالمة الاحترافية (صوت / فيديو) ============ -->
+  <section id="call-stage-container" class="call-stage-overlay hidden">
+    <div class="call-stage-card">
+      <!-- ترويسة المكالمة -->
+      <header class="call-stage-header">
+        <div class="call-stage-peer">
+          <span class="call-type-badge" id="call-type-badge">🎥 مكالمة فيديو</span>
+          <span class="call-peer-title" id="stage-peer-name">--</span>
+          <span class="call-quality-badge" id="call-quality-badge">متصل</span>
+        </div>
+        <div class="call-timer-box">
+          <span class="timer-dot"></span>
+          <span id="call-duration">00:00</span>
+        </div>
+      </header>
+
+      <!-- مساحة العرض الرئيسية -->
+      <div class="call-media-viewport" id="call-media-viewport">
+        <!-- فيديو الطرف البعيد (المشهد الرئيسي) -->
+        <video id="remote-video" class="remote-video" autoplay playsinline></video>
+
+        <!-- واجهة بديلة في حال كانت المكالمة صوتية فقط أو قام الطرف الآخر بإيقاف الكاميرا -->
+        <div id="remote-audio-placeholder" class="remote-placeholder hidden">
+          <div class="audio-wave-avatar">
+            <div class="wave-circle wave-1"></div>
+            <div class="wave-circle wave-2"></div>
+            <div class="wave-avatar-content" id="remote-avatar-letter">👤</div>
+          </div>
+          <p class="placeholder-name" id="remote-placeholder-name">--</p>
+          <p class="placeholder-status" id="remote-media-status">مكالمة صوتية نشطة</p>
+        </div>
+
+        <!-- تيار الفيديو الذاتي (Picture-in-Picture) -->
+        <div class="local-pip-card" id="local-pip-card">
+          <video id="local-video" class="local-video" autoplay playsinline muted></video>
+          <div id="local-cam-off-placeholder" class="local-cam-off hidden">
+            <span>📷 مغلقة</span>
+          </div>
+          <span class="pip-label">أنت (محلي)</span>
+        </div>
+
+        <!-- إشعار حالة الميديا للطرف الآخر (مثلاً: الطرف الآخر كتم المايك أو أطفأ الكاميرا) -->
+        <div id="peer-status-toast" class="peer-status-toast hidden"></div>
+      </div>
+
+      <!-- منصة التحكم العائمة السفلية -->
+      <footer class="call-controls-dock">
+        <button type="button" id="ctrl-mic-btn" class="ctrl-btn" title="كتم / تشغيل الميكروفون">
+          <span class="ctrl-icon" id="ctrl-mic-icon">🎙️</span>
+          <span class="ctrl-label">المايك</span>
+        </button>
+
+        <button type="button" id="ctrl-cam-btn" class="ctrl-btn" title="تشغيل / إيقاف الكاميرا">
+          <span class="ctrl-icon" id="ctrl-cam-icon">📹</span>
+          <span class="ctrl-label">الكاميرا</span>
+        </button>
+
+        <button type="button" id="ctrl-speaker-btn" class="ctrl-btn" title="كتم / تشغيل الصوت">
+          <span class="ctrl-icon" id="ctrl-speaker-icon">🔊</span>
+          <span class="ctrl-label">الصوت</span>
+        </button>
+
+        <button type="button" id="ctrl-fullscreen-btn" class="ctrl-btn" title="ملء الشاشة">
+          <span class="ctrl-icon">⛶</span>
+          <span class="ctrl-label">ملء الشاشة</span>
+        </button>
+
+        <button type="button" id="ctrl-hangup-btn" class="ctrl-btn hangup" title="إنهاء المكالمة">
+          <span class="ctrl-icon">📞</span>
+          <span class="ctrl-label">إنهاء</span>
+        </button>
+      </footer>
+    </div>
+  </section>
+
+  <!-- ============ نافذة الرنين للمكالمة الواردة ============ -->
+  <section id="incoming-call-modal" class="call-overlay hidden">
+    <div class="call-dialog-card ring-animation">
+      <div class="incoming-avatar">
+        <div class="ring-pulse"></div>
+        <span id="incoming-avatar-letter">👤</span>
+      </div>
+      <h3 id="incoming-caller-name">--</h3>
+      <p class="incoming-call-type" id="incoming-call-type-text">مكالمة فيديو واردة...</p>
+
+      <div class="incoming-actions">
+        <button type="button" id="incoming-reject-btn" class="btn-reject-lg">
+          <span>❌</span>
+          <span>رفض</span>
+        </button>
+        <button type="button" id="incoming-accept-btn" class="btn-accept-lg">
+          <span id="accept-btn-icon">🎥</span>
+          <span>قبول المكالمة</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ نافذة جاري الاتصال بالطرف الآخر (Outgoing) ============ -->
+  <section id="outgoing-call-modal" class="call-overlay hidden">
+    <div class="call-dialog-card">
+      <div class="outgoing-avatar">
+        <div class="outgoing-pulse"></div>
+        <span id="outgoing-avatar-letter">📞</span>
+      </div>
+      <h3 id="outgoing-peer-name">--</h3>
+      <p class="outgoing-status-text" id="outgoing-status-text">جارٍ الاتصال عبر الشبكة المحلية...</p>
+
+      <div class="outgoing-actions">
+        <button type="button" id="outgoing-cancel-btn" class="btn-reject-lg">
+          <span>❌</span>
+          <span>إلغاء الاتصال</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ نافذة إنشاء مجموعة جديدة ============ -->
   <section id="new-group-modal" class="call-overlay hidden">
     <div class="call-card modal-card">
       <h2 class="modal-title">مجموعة جديدة</h2>
       <label class="modal-label">اسم المجموعة
-        <input type="text" id="new-group-name" maxlength="50" placeholder="مثال: فريق المشروع" />
+        <input type="text" id="new-group-name" maxlength="50" placeholder="مثال: فريق العمل المحلي" />
       </label>
       <p class="modal-label" style="margin-bottom:6px;">اختر الأعضاء</p>
       <div id="new-group-members" class="member-checklist"></div>
@@ -133,23 +293,7 @@
     </div>
   </div>
 
-  <!-- ============ طبقة المكالمة الثنائية ============ -->
-  <section id="call-overlay" class="call-overlay hidden">
-    <div class="call-card">
-      <div class="call-avatar" aria-hidden="true">🎙️</div>
-      <p class="call-with">مكالمة مع <strong id="call-peer-name">--</strong></p>
-      <p class="call-status" id="call-status-text">جارٍ الاتصال...</p>
-
-      <div class="call-actions">
-        <button id="call-accept-btn" class="btn-accept hidden">قبول</button>
-        <button id="call-reject-btn" class="btn-reject hidden">رفض</button>
-        <button id="call-end-btn" class="btn-reject hidden">إنهاء المكالمة</button>
-      </div>
-    </div>
-  </section>
-
   <div id="remote-audios-container" style="display:none;"></div>
-
   <div id="toast" class="toast hidden"></div>
 
   <script src="/static/app.js"></script>

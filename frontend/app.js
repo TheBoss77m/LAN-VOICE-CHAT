@@ -1,85 +1,159 @@
 /* =========================================================================
-   app.js
-   ------
-   منطق الواجهة الأمامية بالكامل:
-     - تسجيل الدخول / إنشاء حساب
-     - محادثات ثنائية ومكالمات صوتية ثنائية (WebRTC مباشر)
-     - مجموعات: إنشاء، رسائل جماعية، ومكالمات جماعية (Mesh WebRTC)
-
-   لا حاجة لأي مكتبة خارجية: WebSocket و WebRTC مدعومتان أصلًا في المتصفح.
+   LAN Voice & Video Chat — Frontend Core Logic
+   --------------------------------------------
+   - Strict Call State Machine (IDLE -> CALLING/RINGING -> CONNECTED -> ENDED)
+   - WebRTC P2P Video & Voice Calling via Local LAN
+   - Camera Toggle (Audio continues) & Mic Mute (Video continues)
+   - Dual Theme (Dark Obsidian / Crisp Light) with Persistence
+   - Comprehensive Permission & Network Error Handling
+   - Group Call Mesh Audio Preserved
    ========================================================================= */
 
 (() => {
   "use strict";
 
   // -----------------------------------------------------------------------
-  // الحالة العامة
+  // آلة حالات المكالمة (Call State Machine)
+  // -----------------------------------------------------------------------
+  const CallState = {
+    IDLE: "IDLE",
+    CALLING: "CALLING",
+    RINGING: "RINGING",
+    ACCEPTED: "ACCEPTED",
+    CONNECTING: "CONNECTING",
+    CONNECTED: "CONNECTED",
+    REJECTED: "REJECTED",
+    BUSY: "BUSY",
+    FAILED: "FAILED",
+    ENDING: "ENDING",
+    ENDED: "ENDED",
+  };
+
+  // -----------------------------------------------------------------------
+  // الحالة العامة للتطبيق
   // -----------------------------------------------------------------------
   const state = {
     token: localStorage.getItem("lvc_token") || null,
     userId: localStorage.getItem("lvc_user_id") ? Number(localStorage.getItem("lvc_user_id")) : null,
     username: localStorage.getItem("lvc_username") || null,
+    theme: localStorage.getItem("lvc_theme") || "dark",
 
     ws: null,
     wsReconnectTimer: null,
 
     users: new Map(),   // id -> {id, username, status, last_seen}
     groups: new Map(),  // id -> {id, name, created_by, member_count}
-
-    // المحادثة المفتوحة حاليًا في الشاشة الرئيسية
     selectedChat: null, // {type: "user"|"group", id}
 
-    // ---- مكالمة ثنائية (1:1) ----
+    // ---- حالة المكالمة الثنائية (1:1 Call) ----
+    callState: CallState.IDLE,
+    callType: "voice", // "voice" | "video"
+    activeCallPeerId: null,
+    activeCallId: null,
     pc: null,
     localStream: null,
-    activeCallPeerId: null,
+    remoteStream: null,
     pendingOffer: null,
-    pendingRemoteCandidates: [],
+    pendingCandidates: [],
+    callTimerInterval: null,
+    callSeconds: 0,
 
-    // ---- مكالمة جماعية (Mesh) ----
-    activeGroupCall: null, // {groupId, callId}
-    groupPeerConnections: new Map(),  // peerId -> RTCPeerConnection
-    groupPendingCandidates: new Map(), // peerId -> [candidate, ...]
-    groupParticipants: new Map(), // peerId -> username (يشمل نفسي بعد الانضمام)
+    cameraEnabled: true,
     micMuted: false,
+    speakerMuted: false,
+
+    // ---- حالة المكالمة الجماعية (Mesh Call) ----
+    activeGroupCall: null, // {groupId, callId}
+    groupPeerConnections: new Map(),
+    groupPendingCandidates: new Map(),
+    groupParticipants: new Map(),
+    groupMicMuted: false,
   };
 
-  const RTC_CONFIG = { iceServers: [] }; // شبكة محلية واحدة: لا حاجة لـ STUN/TURN خارجي
+  const RTC_CONFIG = { iceServers: [] }; // اتصال محلي مباشر P2P داخل LAN بدون خوادم STUN خارجية
 
   // -----------------------------------------------------------------------
-  // مراجع DOM
+  // مراجع عناصر واجهة المستخدم (DOM References)
   // -----------------------------------------------------------------------
   const el = (id) => document.getElementById(id);
 
+  // شاشات
   const authScreen = el("auth-screen");
   const appScreen = el("app-screen");
-
   const loginForm = el("login-form");
   const registerForm = el("register-form");
   const loginError = el("login-error");
   const registerError = el("register-error");
 
+  // الشريط العلوي
+  const themeToggleBtn = el("theme-toggle-btn");
+  const themeIcon = el("theme-icon");
   const meUsernameEl = el("me-username");
+  const meAvatarLetter = el("me-avatar-letter");
+  const logoutBtn = el("logout-btn");
+  const onlineUsersCount = el("online-users-count");
+
+  // القائمة الجانبية
   const usersListEl = el("users-list");
   const groupsListEl = el("groups-list");
+  const newGroupBtn = el("new-group-btn");
 
+  // منطقة الدردشة
   const noChatSelected = el("no-chat-selected");
   const chatActive = el("chat-active");
+  const backToListBtn = el("back-to-list-btn");
+  const peerAvatar = el("peer-avatar");
   const peerUsernameEl = el("peer-username");
   const peerStatusDot = el("peer-status-dot");
   const peerSubtitleEl = el("peer-subtitle");
+  const voiceCallBtn = el("voice-call-btn");
+  const videoCallBtn = el("video-call-btn");
   const messagesEl = el("messages");
   const messageForm = el("message-form");
   const messageInput = el("message-input");
-  const callBtn = el("call-btn");
 
-  // مكالمة ثنائية
-  const callOverlay = el("call-overlay");
-  const callPeerNameEl = el("call-peer-name");
-  const callStatusTextEl = el("call-status-text");
-  const callAcceptBtn = el("call-accept-btn");
-  const callRejectBtn = el("call-reject-btn");
-  const callEndBtn = el("call-end-btn");
+  // واجهة المكالمة الكبرى (Call Stage)
+  const callStageContainer = el("call-stage-container");
+  const callTypeBadge = el("call-type-badge");
+  const stagePeerName = el("stage-peer-name");
+  const callQualityBadge = el("call-quality-badge");
+  const callDuration = el("call-duration");
+
+  const remoteVideo = el("remote-video");
+  const remoteAudioPlaceholder = el("remote-audio-placeholder");
+  const remoteAvatarLetter = el("remote-avatar-letter");
+  const remotePlaceholderName = el("remote-placeholder-name");
+  const remoteMediaStatus = el("remote-media-status");
+
+  const localPipCard = el("local-pip-card");
+  const localVideo = el("local-video");
+  const localCamOffPlaceholder = el("local-cam-off-placeholder");
+  const peerStatusToast = el("peer-status-toast");
+
+  const ctrlMicBtn = el("ctrl-mic-btn");
+  const ctrlMicIcon = el("ctrl-mic-icon");
+  const ctrlCamBtn = el("ctrl-cam-btn");
+  const ctrlCamIcon = el("ctrl-cam-icon");
+  const ctrlSpeakerBtn = el("ctrl-speaker-btn");
+  const ctrlSpeakerIcon = el("ctrl-speaker-icon");
+  const ctrlFullscreenBtn = el("ctrl-fullscreen-btn");
+  const ctrlHangupBtn = el("ctrl-hangup-btn");
+
+  // نافذة الرنين (Incoming)
+  const incomingCallModal = el("incoming-call-modal");
+  const incomingAvatarLetter = el("incoming-avatar-letter");
+  const incomingCallerName = el("incoming-caller-name");
+  const incomingCallTypeText = el("incoming-call-type-text");
+  const acceptBtnIcon = el("accept-btn-icon");
+  const incomingAcceptBtn = el("incoming-accept-btn");
+  const incomingRejectBtn = el("incoming-reject-btn");
+
+  // نافذة الاتصال الخارجي (Outgoing)
+  const outgoingCallModal = el("outgoing-call-modal");
+  const outgoingAvatarLetter = el("outgoing-avatar-letter");
+  const outgoingPeerName = el("outgoing-peer-name");
+  const outgoingStatusText = el("outgoing-status-text");
+  const outgoingCancelBtn = el("outgoing-cancel-btn");
 
   // مكالمة جماعية
   const groupCallBar = el("group-call-bar");
@@ -96,20 +170,49 @@
   const newGroupModal = el("new-group-modal");
   const newGroupNameInput = el("new-group-name");
   const newGroupMembersEl = el("new-group-members");
+  const newGroupCreateBtn = el("new-group-create-btn");
+  const newGroupCancelBtn = el("new-group-cancel-btn");
   const newGroupError = el("new-group-error");
 
   const remoteAudiosContainer = el("remote-audios-container");
   const toastEl = el("toast");
 
   // -----------------------------------------------------------------------
-  // أدوات مساعدة عامة
+  // إدارة الوضع الليلي / النهاري (Dark / Light Theme)
   // -----------------------------------------------------------------------
 
-  function showToast(message, ms = 3000) {
+  function applyTheme(theme) {
+    state.theme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("lvc_theme", theme);
+    if (themeIcon) {
+      themeIcon.textContent = theme === "light" ? "☀️" : "🌙";
+    }
+  }
+
+  themeToggleBtn.addEventListener("click", () => {
+    const nextTheme = state.theme === "dark" ? "light" : "dark";
+    applyTheme(nextTheme);
+  });
+
+  applyTheme(state.theme);
+
+  // -----------------------------------------------------------------------
+  // التنبيهات والأدوات المساعدة (Helpers)
+  // -----------------------------------------------------------------------
+
+  function showToast(message, ms = 3200) {
     toastEl.textContent = message;
     toastEl.classList.remove("hidden");
     clearTimeout(showToast._t);
     showToast._t = setTimeout(() => toastEl.classList.add("hidden"), ms);
+  }
+
+  function showPeerToast(message, ms = 2500) {
+    peerStatusToast.textContent = message;
+    peerStatusToast.classList.remove("hidden");
+    clearTimeout(showPeerToast._t);
+    showPeerToast._t = setTimeout(() => peerStatusToast.classList.add("hidden"), ms);
   }
 
   async function api(path, { method = "GET", body } = {}) {
@@ -143,12 +246,12 @@
 
   function escapeHtml(str) {
     const d = document.createElement("div");
-    d.textContent = str;
+    d.textContent = str || "";
     return d.innerHTML;
   }
 
   // -----------------------------------------------------------------------
-  // تبديل التبويبات (دخول / حساب جديد)
+  // التبديل بين شاشات المصادقة (Auth Tabs)
   // -----------------------------------------------------------------------
 
   document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -162,10 +265,6 @@
       registerError.textContent = "";
     });
   });
-
-  // -----------------------------------------------------------------------
-  // المصادقة
-  // -----------------------------------------------------------------------
 
   loginForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -197,23 +296,33 @@
     }
   });
 
-  function onAuthSuccess({ token, user_id, username }) {
-    state.token = token;
-    state.userId = user_id;
-    state.username = username;
-    localStorage.setItem("lvc_token", token);
-    localStorage.setItem("lvc_user_id", String(user_id));
-    localStorage.setItem("lvc_username", username);
+  function onAuthSuccess(data) {
+    state.token = data.token;
+    state.userId = data.user_id;
+    state.username = data.username;
+    localStorage.setItem("lvc_token", data.token);
+    localStorage.setItem("lvc_user_id", String(data.user_id));
+    localStorage.setItem("lvc_username", data.username);
     enterApp();
   }
 
-  function logout(notifyServer = true) {
-    if (notifyServer) api("/api/logout", { method: "POST" }).catch(() => {});
-    if (state.ws) { state.ws.close(); state.ws = null; }
-    clearTimeout(state.wsReconnectTimer);
+  logoutBtn.addEventListener("click", () => logout(true));
 
-    endCallLocally();
-    leaveGroupCallLocally();
+  async function logout(notifyServer = true) {
+    if (notifyServer && state.token) {
+      api("/api/logout", { method: "POST" }).catch(() => {});
+    }
+    if (state.callState !== CallState.IDLE) {
+      endCallLocally();
+    }
+    if (state.activeGroupCall) {
+      leaveGroupCallLocally();
+    }
+    if (state.ws) {
+      state.ws.onclose = null;
+      state.ws.close();
+      state.ws = null;
+    }
 
     state.token = null;
     state.userId = null;
@@ -224,235 +333,58 @@
 
     appScreen.classList.add("hidden");
     authScreen.classList.remove("hidden");
-    loginForm.reset();
-    registerForm.reset();
   }
 
-  el("logout-btn").addEventListener("click", () => logout(true));
-
   // -----------------------------------------------------------------------
-  // دخول التطبيق الرئيسي
+  // بدء التطبيق بعد تسجيل الدخول (Enter App)
   // -----------------------------------------------------------------------
 
   async function enterApp() {
     authScreen.classList.add("hidden");
     appScreen.classList.remove("hidden");
+
     meUsernameEl.textContent = state.username;
-
-    await Promise.all([refreshUsers(), refreshGroups()]);
-    connectWebSocket();
-  }
-
-  async function refreshUsers() {
-    try {
-      const users = await api("/api/users");
-      state.users.clear();
-      users.forEach((u) => state.users.set(u.id, u));
-      renderUsersList();
-    } catch (err) {
-      showToast(err.message);
+    if (meAvatarLetter) {
+      meAvatarLetter.textContent = (state.username || "U")[0].toUpperCase();
     }
+
+    connectWebSocket();
+    await loadInitialData();
   }
 
-  async function refreshGroups() {
+  async function loadInitialData() {
     try {
-      const groups = await api("/api/groups");
+      const [users, groups] = await Promise.all([
+        api("/api/users"),
+        api("/api/groups"),
+      ]);
+
+      state.users.clear();
+      for (const u of users) state.users.set(u.id, u);
+      renderUsersList();
+
       state.groups.clear();
-      groups.forEach((g) => state.groups.set(g.id, g));
+      for (const g of groups) state.groups.set(g.id, g);
       renderGroupsList();
     } catch (err) {
-      showToast(err.message);
+      showToast("خطأ أثناء تحميل البيانات: " + err.message);
     }
   }
 
   // -----------------------------------------------------------------------
-  // عرض القوائم الجانبية
-  // -----------------------------------------------------------------------
-
-  function renderUsersList() {
-    usersListEl.innerHTML = "";
-    if (state.users.size === 0) {
-      usersListEl.innerHTML = `<div class="users-empty">لا يوجد مستخدمون آخرون بعد</div>`;
-      return;
-    }
-    const sorted = [...state.users.values()].sort((a, b) => {
-      if (a.status !== b.status) return a.status === "online" ? -1 : 1;
-      return a.username.localeCompare(b.username, "ar");
-    });
-
-    for (const u of sorted) {
-      const isSelected = state.selectedChat && state.selectedChat.type === "user" && state.selectedChat.id === u.id;
-      const row = document.createElement("div");
-      row.className = "user-row" + (isSelected ? " selected" : "");
-      row.innerHTML = `
-        <span class="status-dot ${u.status === "online" ? "online" : ""}"></span>
-        <span class="u-name">${escapeHtml(u.username)}</span>
-        <span class="u-freq">${u.status === "online" ? "متصل" : "غير متصل"}</span>
-      `;
-      row.addEventListener("click", () => selectChat("user", u.id));
-      usersListEl.appendChild(row);
-    }
-  }
-
-  function renderGroupsList() {
-    groupsListEl.innerHTML = "";
-    if (state.groups.size === 0) {
-      groupsListEl.innerHTML = `<div class="users-empty">لا توجد مجموعات بعد</div>`;
-      return;
-    }
-    for (const g of state.groups.values()) {
-      const isSelected = state.selectedChat && state.selectedChat.type === "group" && state.selectedChat.id === g.id;
-      const isLive = state.activeGroupCall && state.activeGroupCall.groupId === g.id;
-      const row = document.createElement("div");
-      row.className = "user-row" + (isSelected ? " selected" : "");
-      row.innerHTML = `
-        <span class="status-dot ${isLive ? "online" : ""}"></span>
-        <span class="u-name">${escapeHtml(g.name)}</span>
-        <span class="u-freq">${g.member_count} أعضاء</span>
-      `;
-      row.addEventListener("click", () => selectChat("group", g.id));
-      groupsListEl.appendChild(row);
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // نافذة إنشاء مجموعة
-  // -----------------------------------------------------------------------
-
-  el("new-group-btn").addEventListener("click", () => {
-    newGroupError.textContent = "";
-    newGroupNameInput.value = "";
-    newGroupMembersEl.innerHTML = "";
-
-    if (state.users.size === 0) {
-      newGroupMembersEl.innerHTML = `<div class="member-checklist-empty">لا يوجد مستخدمون آخرون لإضافتهم</div>`;
-    } else {
-      for (const u of state.users.values()) {
-        const label = document.createElement("label");
-        label.innerHTML = `<input type="checkbox" value="${u.id}" /> ${escapeHtml(u.username)}`;
-        newGroupMembersEl.appendChild(label);
-      }
-    }
-    newGroupModal.classList.remove("hidden");
-  });
-
-  el("new-group-cancel-btn").addEventListener("click", () => newGroupModal.classList.add("hidden"));
-
-  el("new-group-create-btn").addEventListener("click", async () => {
-    const name = newGroupNameInput.value.trim();
-    if (!name) {
-      newGroupError.textContent = "اكتب اسمًا للمجموعة";
-      return;
-    }
-    const memberIds = [...newGroupMembersEl.querySelectorAll("input[type=checkbox]:checked")]
-      .map((cb) => Number(cb.value));
-
-    try {
-      await api("/api/groups", { method: "POST", body: { name, member_ids: memberIds } });
-      newGroupModal.classList.add("hidden");
-      await refreshGroups();
-    } catch (err) {
-      newGroupError.textContent = err.message;
-    }
-  });
-
-  // -----------------------------------------------------------------------
-  // اختيار محادثة (مستخدم أو مجموعة) وعرض السجل
-  // -----------------------------------------------------------------------
-
-  async function selectChat(type, id) {
-    state.selectedChat = { type, id };
-    renderUsersList();
-    renderGroupsList();
-
-    noChatSelected.classList.add("hidden");
-    chatActive.classList.remove("hidden");
-    appScreen.classList.add("chat-open");
-
-    if (type === "user") {
-      const user = state.users.get(id);
-      peerUsernameEl.textContent = user ? user.username : "--";
-      peerStatusDot.classList.remove("hidden");
-      peerStatusDot.classList.toggle("online", user && user.status === "online");
-      peerSubtitleEl.classList.add("hidden");
-      callBtn.textContent = "📞";
-      callBtn.title = "مكالمة صوتية";
-    } else {
-      const group = state.groups.get(id);
-      peerUsernameEl.textContent = group ? group.name : "--";
-      peerStatusDot.classList.add("hidden");
-      peerSubtitleEl.classList.remove("hidden");
-      peerSubtitleEl.textContent = group ? `${group.member_count} أعضاء` : "";
-      callBtn.textContent = "🎙️";
-      callBtn.title = "مكالمة جماعية";
-    }
-
-    messagesEl.innerHTML = "<p style='color:var(--text-dim);text-align:center;font-size:13px;'>جارٍ التحميل...</p>";
-    try {
-      const history = type === "user"
-        ? await api(`/api/messages/${id}`)
-        : await api(`/api/groups/${id}/messages`);
-      renderMessages(history, type);
-    } catch (err) {
-      showToast(err.message);
-    }
-  }
-
-  el("back-to-list-btn").addEventListener("click", () => {
-    appScreen.classList.remove("chat-open");
-  });
-
-  function renderMessages(history, type) {
-    messagesEl.innerHTML = "";
-    for (const m of history) appendMessageBubble(m, type);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function appendMessageBubble(m, type) {
-    const mine = m.sender_id === state.userId;
-    const row = document.createElement("div");
-    row.className = "msg-row " + (mine ? "mine" : "theirs");
-
-    let senderLabel = "";
-    if (type === "group" && !mine) {
-      const sender = state.users.get(m.sender_id);
-      senderLabel = `<div style="font-size:11px;color:var(--accent);margin-bottom:2px;">${escapeHtml(sender ? sender.username : "مستخدم")}</div>`;
-    }
-
-    row.innerHTML = `
-      <div class="bubble">
-        ${senderLabel}
-        ${escapeHtml(m.message)}
-        <span class="time">${formatTime(m.timestamp)}</span>
-      </div>
-    `;
-    messagesEl.appendChild(row);
-  }
-
-  messageForm.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const text = messageInput.value.trim();
-    if (!text || !state.selectedChat) return;
-
-    if (state.selectedChat.type === "user") {
-      sendWs({ type: "chat_message", to: state.selectedChat.id, message: text });
-    } else {
-      sendWs({ type: "group_message", group_id: state.selectedChat.id, message: text });
-    }
-    messageInput.value = "";
-  });
-
-  // -----------------------------------------------------------------------
-  // WebSocket
+  // الاتصال عبر WebSocket والإشارات (Signaling)
   // -----------------------------------------------------------------------
 
   function connectWebSocket() {
+    if (!state.token) return;
+    clearTimeout(state.wsReconnectTimer);
+
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const url = `${protocol}://${window.location.host}/ws?token=${encodeURIComponent(state.token)}`;
     const ws = new WebSocket(url);
     state.ws = ws;
 
-    ws.onopen = () => showToast("متصل بالسيرفر");
+    ws.onopen = () => showToast("متصل بشبكة الاتصال المحلية (LAN)");
 
     ws.onmessage = (event) => {
       let data;
@@ -463,7 +395,7 @@
     ws.onclose = () => {
       state.wsReconnectTimer = setTimeout(() => {
         if (state.token) connectWebSocket();
-      }, 2000);
+      }, 2500);
     };
 
     ws.onerror = () => ws.close();
@@ -473,7 +405,7 @@
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify(payload));
     } else {
-      showToast("لا يوجد اتصال بالسيرفر حاليًا");
+      showToast("لا يوجد اتصال بالشبكة حالياً");
     }
   }
 
@@ -483,17 +415,18 @@
       case "chat_message": return handleChatMessage(data);
       case "group_message": return handleGroupMessage(data);
 
+      // مكالمات ثنائية
       case "call_offer": return handleCallOffer(data);
       case "call_answer": return handleCallAnswer(data);
       case "ice_candidate": return handleRemoteIceCandidate(data);
       case "call_id": state.activeCallId = data.call_id; return;
       case "call_reject": return handleCallRejected(data);
+      case "call_busy": return handleCallBusy(data);
       case "call_end": return handleRemoteCallEnd(data);
-      case "call_error":
-        showToast("المستخدم غير متصل الآن");
-        endCallLocally();
-        return;
+      case "call_error": return handleCallError(data);
+      case "media_state": return handleRemoteMediaState(data);
 
+      // مكالمات جماعية
       case "group_call_incoming": return handleGroupCallIncoming(data);
       case "group_call_roster": return handleGroupCallRoster(data);
       case "group_call_participant_joined": return handleGroupParticipantJoined(data);
@@ -505,14 +438,22 @@
 
   function handleUserStatus(data) {
     const existing = state.users.get(data.user_id);
-    if (existing) existing.status = data.status;
-    else state.users.set(data.user_id, { id: data.user_id, username: data.username, status: data.status });
+    if (existing) {
+      existing.status = data.status;
+    } else {
+      state.users.set(data.user_id, { id: data.user_id, username: data.username, status: data.status });
+    }
     renderUsersList();
 
     if (state.selectedChat && state.selectedChat.type === "user" && state.selectedChat.id === data.user_id) {
       peerStatusDot.classList.toggle("online", data.status === "online");
+      peerSubtitleEl.textContent = data.status === "online" ? "متصل الآن بالشبكة" : "غير متصل";
     }
   }
+
+  // -----------------------------------------------------------------------
+  // الرسائل النصية
+  // -----------------------------------------------------------------------
 
   function handleChatMessage(data) {
     const otherPartyId = data.from === state.userId ? data.to : data.from;
@@ -538,41 +479,291 @@
     }
   }
 
-  // -----------------------------------------------------------------------
-  // ميكروفون مشترك (يُستخدم للمكالمة الثنائية والجماعية)
-  // -----------------------------------------------------------------------
+  messageForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = messageInput.value.trim();
+    if (!text || !state.selectedChat) return;
 
-  async function getMic() {
-    if (state.localStream) return state.localStream;
-    state.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    return state.localStream;
-  }
-
-  function addRemoteAudio(peerId, stream) {
-    removeRemoteAudio(peerId);
-    const audio = document.createElement("audio");
-    audio.dataset.peer = String(peerId);
-    audio.autoplay = true;
-    audio.srcObject = stream;
-    remoteAudiosContainer.appendChild(audio);
-  }
-
-  function removeRemoteAudio(peerId) {
-    const existing = remoteAudiosContainer.querySelector(`audio[data-peer="${peerId}"]`);
-    if (existing) existing.remove();
-  }
-
-  // -----------------------------------------------------------------------
-  // مكالمة ثنائية (1:1)
-  // -----------------------------------------------------------------------
-
-  callBtn.addEventListener("click", () => {
-    if (!state.selectedChat) return;
-    if (state.selectedChat.type === "user") startCall(state.selectedChat.id);
-    else startGroupCall(state.selectedChat.id);
+    if (state.selectedChat.type === "user") {
+      sendWs({ type: "chat_message", to: state.selectedChat.id, message: text });
+    } else {
+      sendWs({ type: "group_message", group_id: state.selectedChat.id, message: text });
+    }
+    messageInput.value = "";
   });
 
-  function createPeerConnection(remoteUserId, { group_id = null } = {}) {
+  function appendMessageBubble(msg, chatType) {
+    const isMine = msg.sender_id === state.userId;
+    const div = document.createElement("div");
+    div.className = `msg-bubble ${isMine ? "mine" : "theirs"}`;
+
+    let senderPrefix = "";
+    if (chatType === "group" && !isMine) {
+      const u = state.users.get(msg.sender_id);
+      senderPrefix = `<div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:3px;">${escapeHtml(u ? u.username : "عضو")}</div>`;
+    }
+
+    div.innerHTML = `
+      ${senderPrefix}
+      <div>${escapeHtml(msg.message)}</div>
+      <div class="msg-time">${formatTime(msg.timestamp)}</div>
+    `;
+    messagesEl.appendChild(div);
+  }
+
+  // -----------------------------------------------------------------------
+  // قائمة الأجهزة والمستخدمين (Sidebar Rendering)
+  // -----------------------------------------------------------------------
+
+  function renderUsersList() {
+    usersListEl.innerHTML = "";
+    const users = [...state.users.values()].filter((u) => u.id !== state.userId);
+
+    // عداد الأجهزة المتصلة
+    const onlineCount = users.filter((u) => u.status === "online").length;
+    if (onlineUsersCount) onlineUsersCount.textContent = String(onlineCount);
+
+    if (users.length === 0) {
+      usersListEl.innerHTML = '<div class="list-placeholder">لا توجد أجهزة أخرى على الشبكة حالياً</div>';
+      return;
+    }
+
+    // فرز: المتصلون أولاً
+    users.sort((a, b) => {
+      if (a.status === "online" && b.status !== "online") return -1;
+      if (a.status !== "online" && b.status === "online") return 1;
+      return a.username.localeCompare(b.username);
+    });
+
+    users.forEach((u) => {
+      const isOnline = u.status === "online";
+      const isSelected = state.selectedChat && state.selectedChat.type === "user" && state.selectedChat.id === u.id;
+
+      const item = document.createElement("div");
+      item.className = `user-item ${isSelected ? "active" : ""}`;
+
+      item.innerHTML = `
+        <div class="user-meta-left">
+          <div class="user-avatar-wrap">
+            <div class="user-avatar">${u.username[0].toUpperCase()}</div>
+            <span class="status-dot ${isOnline ? "online" : ""}"></span>
+          </div>
+          <div class="user-details">
+            <span class="user-name">${escapeHtml(u.username)}</span>
+            <span class="user-sub">${isOnline ? "متصل بالشبكة" : "غير متصل"}</span>
+          </div>
+        </div>
+        <div class="user-quick-actions">
+          <button type="button" class="btn-quick-call" title="مكالمة صوتية" data-user-id="${u.id}">📞</button>
+          <button type="button" class="btn-quick-video" title="مكالمة فيديو" data-user-id="${u.id}">🎥</button>
+        </div>
+      `;
+
+      // النقر على البطاقة لفتح المحادثة
+      item.addEventListener("click", (e) => {
+        if (e.target.closest(".btn-quick-call") || e.target.closest(".btn-quick-video")) return;
+        selectChat("user", u.id);
+      });
+
+      // زر الاتصال الصوتي السريع
+      const quickCallBtn = item.querySelector(".btn-quick-call");
+      quickCallBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectChat("user", u.id);
+        start1on1Call(u.id, "voice");
+      });
+
+      // زر اتصال الفيديو السريع
+      const quickVideoBtn = item.querySelector(".btn-quick-video");
+      quickVideoBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectChat("user", u.id);
+        start1on1Call(u.id, "video");
+      });
+
+      usersListEl.appendChild(item);
+    });
+  }
+
+  function renderGroupsList() {
+    groupsListEl.innerHTML = "";
+    const groups = [...state.groups.values()];
+
+    if (groups.length === 0) {
+      groupsListEl.innerHTML = '<div class="list-placeholder">لا توجد مجموعات بعد</div>';
+      return;
+    }
+
+    groups.forEach((g) => {
+      const isSelected = state.selectedChat && state.selectedChat.type === "group" && state.selectedChat.id === g.id;
+      const isCallActive = state.activeGroupCall && state.activeGroupCall.groupId === g.id;
+
+      const item = document.createElement("div");
+      item.className = `user-item ${isSelected ? "active" : ""}`;
+      item.innerHTML = `
+        <div class="user-meta-left">
+          <div class="user-avatar-wrap">
+            <div class="user-avatar" style="background:var(--bg-raised);">👥</div>
+          </div>
+          <div class="user-details">
+            <span class="user-name">${escapeHtml(g.name)}</span>
+            <span class="user-sub">${g.member_count} أعضاء ${isCallActive ? "● مكالمة جارية" : ""}</span>
+          </div>
+        </div>
+      `;
+
+      item.addEventListener("click", () => selectChat("group", g.id));
+      groupsListEl.appendChild(item);
+    });
+  }
+
+  async function selectChat(type, id) {
+    state.selectedChat = { type, id };
+    renderUsersList();
+    renderGroupsList();
+
+    noChatSelected.classList.add("hidden");
+    chatActive.classList.remove("hidden");
+    messagesEl.innerHTML = "";
+
+    // دعم التجاوب على الهواتف
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebar && window.innerWidth <= 768) {
+      sidebar.classList.add("collapsed");
+    }
+
+    if (type === "user") {
+      const u = state.users.get(id);
+      peerUsernameEl.textContent = u ? u.username : "مستخدم";
+      peerAvatar.textContent = u ? u.username[0].toUpperCase() : "👤";
+      const isOnline = u && u.status === "online";
+      peerStatusDot.classList.toggle("online", isOnline);
+      peerSubtitleEl.textContent = isOnline ? "متصل الآن بالشبكة" : "غير متصل";
+
+      voiceCallBtn.classList.remove("hidden");
+      videoCallBtn.classList.remove("hidden");
+
+      try {
+        const history = await api(`/api/messages/${id}`);
+        for (const m of history) appendMessageBubble(m, "user");
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } catch (err) {
+        showToast("تعذر جلب سجل الرسائل: " + err.message);
+      }
+    } else {
+      const g = state.groups.get(id);
+      peerUsernameEl.textContent = g ? g.name : "مجموعة";
+      peerAvatar.textContent = "👥";
+      peerStatusDot.classList.remove("online");
+      peerSubtitleEl.textContent = `${g ? g.member_count : ""} أعضاء`;
+
+      voiceCallBtn.classList.remove("hidden"); // مكالمة جماعية صوتية
+      videoCallBtn.classList.add("hidden");
+
+      try {
+        const history = await api(`/api/groups/${id}/messages`);
+        for (const m of history) appendMessageBubble(m, "group");
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      } catch (err) {
+        showToast("تعذر جلب سجل رسائل المجموعة: " + err.message);
+      }
+    }
+  }
+
+  backToListBtn.addEventListener("click", () => {
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebar) sidebar.classList.remove("collapsed");
+  });
+
+  // -----------------------------------------------------------------------
+  // الحصول على الميديا (Camera & Microphone Acquisition) مع معالجة الأخطاء
+  // -----------------------------------------------------------------------
+
+  async function getLocalMedia(callType = "voice") {
+    if (state.localStream) {
+      // إذا كان التدفق موجوداً مسبقاً وتطلب الآن فيديو
+      if (callType === "video" && state.localStream.getVideoTracks().length === 0) {
+        stopMediaStream(state.localStream);
+        state.localStream = null;
+      } else {
+        return state.localStream;
+      }
+    }
+
+    const audioConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
+    let constraints;
+    if (callType === "video") {
+      constraints = {
+        audio: audioConstraints,
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+        },
+      };
+    } else {
+      constraints = {
+        audio: audioConstraints,
+        video: false,
+      };
+    }
+
+    try {
+      state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      return state.localStream;
+    } catch (err) {
+      // محاولة ثانية بقيود أبسط للفيديو إذا فشلت القيود المثالية
+      if (callType === "video") {
+        try {
+          state.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+          return state.localStream;
+        } catch (retryErr) {
+          handleMediaError(retryErr, "video");
+          throw retryErr;
+        }
+      } else {
+        handleMediaError(err, "audio");
+        throw err;
+      }
+    }
+  }
+
+  function handleMediaError(err, type) {
+    if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      showToast(
+        type === "video"
+          ? "تم رفض إذن الكاميرا أو الميكروفون. يرجى تفعيل الإذن من إعدادات المتصفح."
+          : "تم رفض إذن الميكروفون. يرجى تفعيل الإذن للاستمرار."
+      );
+    } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      showToast(
+        type === "video"
+          ? "لم يتم العثور على كاميرا أو ميكروفون متصل بالجهاز."
+          : "لم يتم العثور على ميكروفون متصل بالجهاز."
+      );
+    } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+      showToast("الكاميرا أو الميكروفون قيد الاستخدام بواسطة تطبيق آخر.");
+    } else {
+      showToast("تعذر الوصول لوسائط الجهاز: " + err.message);
+    }
+  }
+
+  function stopMediaStream(stream) {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // إنشاء وإدارة RTCPeerConnection للمكالمة الثنائية (1:1 WebRTC)
+  // -----------------------------------------------------------------------
+
+  function createPeerConnection(remoteUserId) {
     const pc = new RTCPeerConnection(RTC_CONFIG);
 
     pc.onicecandidate = (event) => {
@@ -582,90 +773,198 @@
     };
 
     pc.ontrack = (event) => {
-      addRemoteAudio(remoteUserId, event.streams[0]);
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      state.remoteStream = stream;
+
+      // ربط الفيديو
+      remoteVideo.srcObject = stream;
+      remoteVideo.classList.remove("hidden");
+
+      // التحقق مما إذا كان هناك مسار فيديو شغال
+      const hasVideo = stream.getVideoTracks().some((t) => t.enabled);
+      if (hasVideo && state.callType === "video") {
+        remoteAudioPlaceholder.classList.add("hidden");
+      } else {
+        remoteAudioPlaceholder.classList.remove("hidden");
+      }
+
+      event.track.onmute = () => {
+        if (event.track.kind === "video") {
+          remoteAudioPlaceholder.classList.remove("hidden");
+        }
+      };
+      event.track.onunmute = () => {
+        if (event.track.kind === "video") {
+          remoteAudioPlaceholder.classList.add("hidden");
+        }
+      };
     };
 
     pc.onconnectionstatechange = () => {
-      if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
-        if (group_id) {
-          state.groupPeerConnections.delete(remoteUserId);
-          removeRemoteAudio(remoteUserId);
-        } else if (state.activeCallPeerId === remoteUserId) {
-          callStatusTextEl.textContent = "انتهت المكالمة";
-          setTimeout(() => closeCallOverlay(), 1200);
-        }
+      switch (pc.connectionState) {
+        case "connected":
+          state.callState = CallState.CONNECTED;
+          callQualityBadge.textContent = "متصل ممتاز";
+          callQualityBadge.style.color = "var(--online)";
+          startCallTimer();
+          break;
+        case "connecting":
+          state.callState = CallState.CONNECTING;
+          callQualityBadge.textContent = "جارٍ الربط...";
+          break;
+        case "disconnected":
+          callQualityBadge.textContent = "انقطع الاتصال";
+          callQualityBadge.style.color = "var(--warning)";
+          showToast("انقطع الاتصال بالطرف الآخر");
+          break;
+        case "failed":
+        case "closed":
+          if (state.callState !== CallState.IDLE) {
+            endCallLocally();
+          }
+          break;
       }
     };
 
     return pc;
   }
 
-  async function startCall(peerId) {
-    if (state.activeGroupCall) {
-      showToast("أنهِ المكالمة الجماعية أولًا");
+  // -----------------------------------------------------------------------
+  // بدء المكالمة الثنائية (Start Call: Caller Side)
+  // -----------------------------------------------------------------------
+
+  voiceCallBtn.addEventListener("click", () => {
+    if (!state.selectedChat) return;
+    if (state.selectedChat.type === "user") start1on1Call(state.selectedChat.id, "voice");
+    else startGroupCall(state.selectedChat.id);
+  });
+
+  videoCallBtn.addEventListener("click", () => {
+    if (!state.selectedChat || state.selectedChat.type !== "user") return;
+    start1on1Call(state.selectedChat.id, "video");
+  });
+
+  async function start1on1Call(peerId, callType = "voice") {
+    if (state.callState !== CallState.IDLE) {
+      showToast("أنت في مكالمة حالياً، أنهِها أولاً.");
       return;
     }
+    if (state.activeGroupCall) {
+      showToast("أنهِ المكالمة الجماعية الحالية أولاً.");
+      return;
+    }
+
     const peer = state.users.get(peerId);
     if (!peer || peer.status !== "online") {
-      showToast("المستخدم غير متصل حاليًا");
+      showToast("هذا المستخدم غير متصل بالشبكة حالياً.");
       return;
     }
 
+    state.callType = callType;
     state.activeCallPeerId = peerId;
-    openCallOverlay(peer.username, "جارٍ الاتصال...");
-    callAcceptBtn.classList.add("hidden");
-    callRejectBtn.classList.add("hidden");
-    callEndBtn.classList.remove("hidden");
+    state.callState = CallState.CALLING;
+
+    // فتح نافذة الاتصال الخارجي
+    outgoingPeerName.textContent = peer.username;
+    outgoingAvatarLetter.textContent = callType === "video" ? "🎥" : "📞";
+    outgoingStatusText.textContent = callType === "video" ? "جارٍ طلب مكالمة فيديو..." : "جارٍ طلب مكالمة صوتية...";
+    outgoingCallModal.classList.remove("hidden");
 
     try {
-      const stream = await getMic();
+      const stream = await getLocalMedia(callType);
       const pc = createPeerConnection(peerId);
       state.pc = pc;
+
+      // ربط المعاينة المحلية
+      if (callType === "video") {
+        localVideo.srcObject = stream;
+        localPipCard.classList.remove("hidden");
+        localCamOffPlaceholder.classList.add("hidden");
+      } else {
+        localPipCard.classList.add("hidden");
+      }
+
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      sendWs({ type: "call_offer", to: peerId, sdp: offer });
+
+      sendWs({
+        type: "call_offer",
+        to: peerId,
+        sdp: offer,
+        call_type: callType,
+      });
     } catch (err) {
-      showToast("تعذّر الوصول للميكروفون: " + err.message);
-      closeCallOverlay();
+      endCallLocally();
     }
   }
 
+  outgoingCancelBtn.addEventListener("click", () => {
+    if (state.activeCallPeerId) {
+      sendWs({ type: "call_reject", to: state.activeCallPeerId, reason: "cancelled" });
+    }
+    endCallLocally();
+  });
+
+  // -----------------------------------------------------------------------
+  // استقبال المكالمة الثنائية (Incoming Call: Callee Side)
+  // -----------------------------------------------------------------------
+
   function handleCallOffer(data) {
-    // عرض ضمن مكالمة جماعية: نقبله تلقائيًا بدون واجهة رنين (المستخدم وافق مسبقًا بالانضمام)
     if (data.group_id || state.activeGroupCall) {
       handleGroupMeshOffer(data);
       return;
     }
 
-    if (state.activeCallPeerId) {
-      sendWs({ type: "call_reject", to: data.from });
+    // إذا كان مشغولاً بمكالمة أخرى
+    if (state.callState !== CallState.IDLE) {
+      sendWs({ type: "call_busy", to: data.from, reason: "user_busy" });
       return;
     }
 
+    state.callState = CallState.RINGING;
     state.activeCallPeerId = data.from;
+    state.callType = data.call_type || "voice";
     state.pendingOffer = data.sdp;
+    state.activeCallId = data.call_id;
 
-    openCallOverlay(data.from_username, "مكالمة واردة...");
-    callAcceptBtn.classList.remove("hidden");
-    callRejectBtn.classList.remove("hidden");
-    callEndBtn.classList.add("hidden");
+    incomingCallerName.textContent = data.from_username;
+    incomingAvatarLetter.textContent = state.callType === "video" ? "🎥" : "👤";
+    incomingCallTypeText.textContent = state.callType === "video" ? "مكالمة فيديو واردة عبر LAN..." : "مكالمة صوتية واردة عبر LAN...";
+    acceptBtnIcon.textContent = state.callType === "video" ? "🎥" : "📞";
+
+    incomingCallModal.classList.remove("hidden");
   }
 
-  callAcceptBtn.addEventListener("click", async () => {
+  incomingRejectBtn.addEventListener("click", () => {
+    if (state.activeCallPeerId) {
+      sendWs({ type: "call_reject", to: state.activeCallPeerId });
+    }
+    endCallLocally();
+  });
+
+  incomingAcceptBtn.addEventListener("click", async () => {
     const peerId = state.activeCallPeerId;
     if (!peerId) return;
 
-    callStatusTextEl.textContent = "جارٍ الاتصال...";
-    callAcceptBtn.classList.add("hidden");
-    callRejectBtn.classList.add("hidden");
-    callEndBtn.classList.remove("hidden");
+    incomingCallModal.classList.add("hidden");
+    state.callState = CallState.ACCEPTED;
 
     try {
-      const stream = await getMic();
+      const stream = await getLocalMedia(state.callType);
       const pc = createPeerConnection(peerId);
       state.pc = pc;
+
+      // ربط المعاينة المحلية
+      if (state.callType === "video") {
+        localVideo.srcObject = stream;
+        localPipCard.classList.remove("hidden");
+        localCamOffPlaceholder.classList.add("hidden");
+      } else {
+        localPipCard.classList.add("hidden");
+      }
+
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       await pc.setRemoteDescription(new RTCSessionDescription(state.pendingOffer));
@@ -673,42 +972,47 @@
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+
       sendWs({ type: "call_answer", to: peerId, sdp: answer });
 
-      callStatusTextEl.textContent = "متصل الآن";
+      state.callState = CallState.CONNECTING;
+      openCallStage();
     } catch (err) {
-      showToast("تعذّر بدء المكالمة: " + err.message);
-      endCall();
+      showToast("تعذر قبول المكالمة: " + err.message);
+      endCallLocally();
     }
   });
 
-  callRejectBtn.addEventListener("click", () => {
-    if (state.activeCallPeerId) sendWs({ type: "call_reject", to: state.activeCallPeerId });
-    closeCallOverlay();
-  });
-
-  callEndBtn.addEventListener("click", () => endCall());
+  // -----------------------------------------------------------------------
+  // استكمال الاتصال بعد القبول (Answer Handling)
+  // -----------------------------------------------------------------------
 
   async function handleCallAnswer(data) {
-    const groupPc = state.groupPeerConnections.get(data.from);
-    if (groupPc) {
-      await groupPc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      await flushGroupPendingCandidates(data.from);
+    if (data.group_id) {
+      const groupPc = state.groupPeerConnections.get(data.from);
+      if (groupPc) {
+        await groupPc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        await flushGroupPendingCandidates(data.from);
+      }
       return;
     }
+
     if (!state.pc) return;
+
+    outgoingCallModal.classList.add("hidden");
     await state.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
     await flushPendingCandidates();
-    callStatusTextEl.textContent = "متصل الآن";
+
+    state.callState = CallState.CONNECTING;
+    openCallStage();
   }
 
   async function handleRemoteIceCandidate(data) {
-    const groupPc = state.groupPeerConnections.get(data.from);
-    if (groupPc) {
-      if (groupPc.remoteDescription) {
-        try { await groupPc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-        catch (err) { console.warn("ICE error:", err); }
-      } else {
+    if (data.group_id) {
+      const groupPc = state.groupPeerConnections.get(data.from);
+      if (groupPc && groupPc.remoteDescription) {
+        try { await groupPc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (_) {}
+      } else if (data.from) {
         const list = state.groupPendingCandidates.get(data.from) || [];
         list.push(data.candidate);
         state.groupPendingCandidates.set(data.from, list);
@@ -717,40 +1021,76 @@
     }
 
     if (state.pc && state.pc.remoteDescription) {
-      try { await state.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
-      catch (err) { console.warn("ICE error:", err); }
+      try { await state.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (_) {}
     } else {
-      state.pendingRemoteCandidates.push(data.candidate);
+      state.pendingCandidates.push(data.candidate);
     }
   }
 
   async function flushPendingCandidates() {
-    for (const c of state.pendingRemoteCandidates) {
-      try { await state.pc.addIceCandidate(new RTCIceCandidate(c)); }
-      catch (err) { console.warn("ICE error:", err); }
+    if (!state.pc) return;
+    for (const c of state.pendingCandidates) {
+      try { await state.pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_) {}
     }
-    state.pendingRemoteCandidates = [];
+    state.pendingCandidates = [];
   }
 
   async function flushGroupPendingCandidates(peerId) {
     const pc = state.groupPeerConnections.get(peerId);
+    if (!pc) return;
     const list = state.groupPendingCandidates.get(peerId) || [];
     for (const c of list) {
-      try { await pc.addIceCandidate(new RTCIceCandidate(c)); }
-      catch (err) { console.warn("ICE error:", err); }
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_) {}
     }
     state.groupPendingCandidates.delete(peerId);
   }
 
+  // -----------------------------------------------------------------------
+  // أحداث الرفض، الانشغال، وإنهاء المكالمة
+  // -----------------------------------------------------------------------
+
   function handleCallRejected() {
-    showToast("تم رفض المكالمة");
+    showToast("تم رفض المكالمة.");
+    endCallLocally();
+  }
+
+  function handleCallBusy() {
+    showToast("المستخدم مشغول بمكالمة أخرى حالياً.");
+    endCallLocally();
+  }
+
+  function handleCallError(data) {
+    if (data.reason === "user_offline") {
+      showToast("المستخدم غير متصل بالشبكة.");
+    } else if (data.reason === "already_in_call") {
+      showToast("أنت بالفعل في مكالمة حالياً.");
+    } else {
+      showToast("حدث خطأ في المكالمة.");
+    }
     endCallLocally();
   }
 
   function handleRemoteCallEnd() {
-    callStatusTextEl.textContent = "أنهى الطرف الآخر المكالمة";
-    setTimeout(() => endCallLocally(), 800);
+    showToast("أنهى الطرف الآخر المكالمة.");
+    endCallLocally();
   }
+
+  function handleRemoteMediaState(data) {
+    if (!data.video_enabled) {
+      remoteAudioPlaceholder.classList.remove("hidden");
+      showPeerToast("أوقف الطرف الآخر الكاميرا");
+    } else {
+      if (state.callType === "video") {
+        remoteAudioPlaceholder.classList.add("hidden");
+        showPeerToast("شغّل الطرف الآخر الكاميرا");
+      }
+    }
+    if (!data.audio_enabled) {
+      showPeerToast("كتم الطرف الآخر الميكروفون");
+    }
+  }
+
+  ctrlHangupBtn.addEventListener("click", () => endCall());
 
   function endCall() {
     if (state.activeCallPeerId) {
@@ -760,58 +1100,173 @@
   }
 
   function endCallLocally() {
-    if (state.pc) { state.pc.close(); state.pc = null; }
-    if (state.activeCallPeerId) removeRemoteAudio(state.activeCallPeerId);
+    state.callState = CallState.ENDED;
+    stopCallTimer();
+
+    if (state.pc) {
+      state.pc.close();
+      state.pc = null;
+    }
     if (state.localStream && !state.activeGroupCall) {
-      state.localStream.getTracks().forEach((t) => t.stop());
+      stopMediaStream(state.localStream);
       state.localStream = null;
     }
+
     state.activeCallPeerId = null;
     state.activeCallId = null;
-    state.pendingRemoteCandidates = [];
     state.pendingOffer = null;
-    closeCallOverlay();
-  }
+    state.pendingCandidates = [];
+    state.remoteStream = null;
 
-  function openCallOverlay(peerName, statusText) {
-    callPeerNameEl.textContent = peerName;
-    callStatusTextEl.textContent = statusText;
-    callOverlay.classList.remove("hidden");
-  }
+    // إعادة تعيين عناصر الـ DOM
+    remoteVideo.srcObject = null;
+    localVideo.srcObject = null;
+    incomingCallModal.classList.add("hidden");
+    outgoingCallModal.classList.add("hidden");
+    callStageContainer.classList.add("hidden");
 
-  function closeCallOverlay() {
-    callOverlay.classList.add("hidden");
+    state.cameraEnabled = true;
+    state.micMuted = false;
+    state.speakerMuted = false;
+    ctrlMicBtn.classList.remove("off");
+    ctrlCamBtn.classList.remove("off");
+    ctrlSpeakerBtn.classList.remove("off");
+
+    state.callState = CallState.IDLE;
   }
 
   // -----------------------------------------------------------------------
-  // مكالمة جماعية (Mesh WebRTC)
+  // واجهة عرض المكالمة الكبرى والضوابط (Call Stage Controls)
+  // -----------------------------------------------------------------------
+
+  function openCallStage() {
+    const peer = state.users.get(state.activeCallPeerId);
+    stagePeerName.textContent = peer ? peer.username : "مستخدم";
+    remotePlaceholderName.textContent = peer ? peer.username : "مستخدم";
+    remoteAvatarLetter.textContent = peer ? peer.username[0].toUpperCase() : "👤";
+
+    if (state.callType === "video") {
+      callTypeBadge.textContent = "🎥 مكالمة فيديو";
+      remoteAudioPlaceholder.classList.add("hidden");
+      ctrlCamBtn.style.display = "flex";
+    } else {
+      callTypeBadge.textContent = "📞 مكالمة صوتية";
+      remoteAudioPlaceholder.classList.remove("hidden");
+      localPipCard.classList.add("hidden");
+      ctrlCamBtn.style.display = "none"; // إخفاء زر الكاميرا بالمكالمة الصوتية
+    }
+
+    callStageContainer.classList.remove("hidden");
+  }
+
+  function startCallTimer() {
+    clearInterval(state.callTimerInterval);
+    state.callSeconds = 0;
+    callDuration.textContent = "00:00";
+    state.callTimerInterval = setInterval(() => {
+      state.callSeconds++;
+      const mins = String(Math.floor(state.callSeconds / 60)).padStart(2, "0");
+      const secs = String(state.callSeconds % 60).padStart(2, "0");
+      callDuration.textContent = `${mins}:${secs}`;
+    }, 1000);
+  }
+
+  function stopCallTimer() {
+    clearInterval(state.callTimerInterval);
+    state.callTimerInterval = null;
+    state.callSeconds = 0;
+  }
+
+  // كتم / تشغيل الميكروفون
+  ctrlMicBtn.addEventListener("click", () => {
+    if (!state.localStream) return;
+    state.micMuted = !state.micMuted;
+
+    state.localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !state.micMuted;
+    });
+
+    ctrlMicBtn.classList.toggle("off", state.micMuted);
+    ctrlMicIcon.textContent = state.micMuted ? "🔇" : "🎙️";
+
+    if (state.activeCallPeerId) {
+      sendWs({
+        type: "media_state",
+        to: state.activeCallPeerId,
+        video_enabled: state.cameraEnabled,
+        audio_enabled: !state.micMuted,
+      });
+    }
+  });
+
+  // تشغيل / إيقاف الكاميرا (الفيديو يتوقف والصوت يستمر بالعمل)
+  ctrlCamBtn.addEventListener("click", () => {
+    if (!state.localStream) return;
+    state.cameraEnabled = !state.cameraEnabled;
+
+    state.localStream.getVideoTracks().forEach((track) => {
+      track.enabled = state.cameraEnabled;
+    });
+
+    ctrlCamBtn.classList.toggle("off", !state.cameraEnabled);
+    ctrlCamIcon.textContent = state.cameraEnabled ? "📹" : "📷";
+    localCamOffPlaceholder.classList.toggle("hidden", state.cameraEnabled);
+
+    if (state.activeCallPeerId) {
+      sendWs({
+        type: "media_state",
+        to: state.activeCallPeerId,
+        video_enabled: state.cameraEnabled,
+        audio_enabled: !state.micMuted,
+      });
+    }
+  });
+
+  // كتم / تشغيل مكبر الصوت
+  ctrlSpeakerBtn.addEventListener("click", () => {
+    state.speakerMuted = !state.speakerMuted;
+    remoteVideo.muted = state.speakerMuted;
+
+    ctrlSpeakerBtn.classList.toggle("off", state.speakerMuted);
+    ctrlSpeakerIcon.textContent = state.speakerMuted ? "🔈" : "🔊";
+  });
+
+  // ملء الشاشة
+  ctrlFullscreenBtn.addEventListener("click", () => {
+    if (!document.fullscreenElement) {
+      callStageContainer.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // المكالمات الجماعية (Mesh Voice Calls)
   // -----------------------------------------------------------------------
 
   async function startGroupCall(groupId) {
-    if (state.activeCallPeerId) {
-      showToast("أنهِ المكالمة الثنائية أولًا");
+    if (state.callState !== CallState.IDLE) {
+      showToast("أنهِ المكالمة الثنائية أولاً");
       return;
     }
-    // إعلام كل أعضاء المجموعة (دعوة/رنين)، ثم الانضمام فعليًا كمُبادر
     sendWs({ type: "group_call_invite", group_id: groupId });
     await joinGroupCall(groupId);
   }
 
   async function joinGroupCall(groupId) {
     if (state.activeGroupCall) {
-      if (state.activeGroupCall.groupId === groupId) return; // بالفعل بنفس المكالمة
-      showToast("أنهِ المكالمة الجماعية الحالية أولًا");
+      if (state.activeGroupCall.groupId === groupId) return;
+      showToast("أنهِ المكالمة الجماعية الحالية أولاً");
       return;
     }
-    if (state.activeCallPeerId) {
-      showToast("أنهِ المكالمة الثنائية أولًا");
+    if (state.callState !== CallState.IDLE) {
+      showToast("أنهِ المكالمة الثنائية أولاً");
       return;
     }
 
     try {
-      await getMic();
+      await getLocalMedia("voice");
     } catch (err) {
-      showToast("تعذّر الوصول للميكروفون: " + err.message);
       return;
     }
 
@@ -828,7 +1283,6 @@
     if (!state.activeGroupCall || state.activeGroupCall.groupId !== data.group_id) return;
     state.activeGroupCall.callId = data.call_id;
 
-    // أنا المنضم الجديد: أفتح اتصالًا مباشرًا مع كل مشارك موجود مسبقًا
     for (const p of data.participants) {
       state.groupParticipants.set(p.id, p.username);
       await connectToGroupPeer(p.id);
@@ -838,7 +1292,7 @@
 
   async function connectToGroupPeer(peerId) {
     if (state.groupPeerConnections.has(peerId)) return;
-    const pc = createPeerConnection(peerId, { group_id: state.activeGroupCall.groupId });
+    const pc = createGroupPeerConnection(peerId, state.activeGroupCall.groupId);
     state.groupPeerConnections.set(peerId, pc);
 
     state.localStream.getTracks().forEach((track) => pc.addTrack(track, state.localStream));
@@ -848,14 +1302,36 @@
     sendWs({ type: "call_offer", to: peerId, sdp: offer, group_id: state.activeGroupCall.groupId });
   }
 
+  function createGroupPeerConnection(remoteUserId, groupId) {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendWs({ type: "ice_candidate", to: remoteUserId, candidate: event.candidate, group_id: groupId });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      addRemoteAudio(remoteUserId, event.streams[0]);
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (["disconnected", "failed", "closed"].includes(pc.connectionState)) {
+        state.groupPeerConnections.delete(remoteUserId);
+        removeRemoteAudio(remoteUserId);
+      }
+    };
+
+    return pc;
+  }
+
   async function handleGroupMeshOffer(data) {
-    // عرض وارد من مشارك (جديد انضم بعدنا، أو أثناء إعداد الاتصال المتبادل)
     const groupId = data.group_id || (state.activeGroupCall && state.activeGroupCall.groupId);
     if (!state.activeGroupCall || state.activeGroupCall.groupId !== groupId) return;
 
     let pc = state.groupPeerConnections.get(data.from);
     if (!pc) {
-      pc = createPeerConnection(data.from, { group_id: groupId });
+      pc = createGroupPeerConnection(data.from, groupId);
       state.groupPeerConnections.set(data.from, pc);
       state.localStream.getTracks().forEach((track) => pc.addTrack(track, state.localStream));
     }
@@ -865,14 +1341,28 @@
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    sendWs({ type: "call_answer", to: data.from, sdp: answer });
+    sendWs({ type: "call_answer", to: data.from, sdp: answer, group_id: groupId });
 
-    state.groupParticipants.set(data.from, data.from_username || state.groupParticipants.get(data.from) || "مستخدم");
+    state.groupParticipants.set(data.from, data.from_username || "مستخدم");
     updateGroupCallBar();
   }
 
+  function addRemoteAudio(peerId, stream) {
+    removeRemoteAudio(peerId);
+    const audio = document.createElement("audio");
+    audio.dataset.peer = String(peerId);
+    audio.autoplay = true;
+    audio.srcObject = stream;
+    remoteAudiosContainer.appendChild(audio);
+  }
+
+  function removeRemoteAudio(peerId) {
+    const existing = remoteAudiosContainer.querySelector(`audio[data-peer="${peerId}"]`);
+    if (existing) existing.remove();
+  }
+
   function handleGroupCallIncoming(data) {
-    if (state.activeGroupCall || state.activeCallPeerId) return; // مشغول بمكالمة أخرى
+    if (state.activeGroupCall || state.callState !== CallState.IDLE) return;
 
     groupInviteText.textContent = `${data.from_username} بدأ مكالمة جماعية`;
     groupInviteBanner.dataset.groupId = String(data.group_id);
@@ -896,7 +1386,6 @@
     if (!state.activeGroupCall || state.activeGroupCall.groupId !== data.group_id) return;
     state.groupParticipants.set(data.user_id, data.username);
     updateGroupCallBar();
-    // الاتصال الفعلي (RTCPeerConnection) سيصل تلقائيًا عبر call_offer من المنضم الجديد
   }
 
   function handleGroupParticipantLeft(data) {
@@ -914,9 +1403,9 @@
 
   gcbMuteBtn.addEventListener("click", () => {
     if (!state.localStream) return;
-    state.micMuted = !state.micMuted;
-    state.localStream.getAudioTracks().forEach((t) => (t.enabled = !state.micMuted));
-    gcbMuteBtn.textContent = state.micMuted ? "إلغاء الكتم" : "كتم";
+    state.groupMicMuted = !state.groupMicMuted;
+    state.localStream.getAudioTracks().forEach((t) => (t.enabled = !state.groupMicMuted));
+    gcbMuteBtn.textContent = state.groupMicMuted ? "إلغاء الكتم" : "كتم";
   });
 
   function leaveGroupCall() {
@@ -933,13 +1422,13 @@
     state.groupParticipants.clear();
     remoteAudiosContainer.innerHTML = "";
 
-    if (state.localStream && !state.activeCallPeerId) {
-      state.localStream.getTracks().forEach((t) => t.stop());
+    if (state.localStream && state.callState === CallState.IDLE) {
+      stopMediaStream(state.localStream);
       state.localStream = null;
     }
 
     state.activeGroupCall = null;
-    state.micMuted = false;
+    state.groupMicMuted = false;
     gcbMuteBtn.textContent = "كتم";
     updateGroupCallBar();
     renderGroupsList();
@@ -948,7 +1437,6 @@
   function updateGroupCallBar() {
     if (!state.activeGroupCall) {
       groupCallBar.classList.add("hidden");
-      appScreen.classList.remove("has-group-call");
       return;
     }
     const group = state.groups.get(state.activeGroupCall.groupId);
@@ -956,12 +1444,65 @@
     const names = [...state.groupParticipants.values()];
     gcbParticipants.textContent = `${names.length} مشاركين — ${names.join("، ")}`;
     groupCallBar.classList.remove("hidden");
-    appScreen.classList.add("has-group-call");
-    renderGroupsList();
   }
 
   // -----------------------------------------------------------------------
-  // نقطة البداية
+  // إنشاء المجموعات (New Group Modal)
+  // -----------------------------------------------------------------------
+
+  newGroupBtn.addEventListener("click", () => {
+    newGroupNameInput.value = "";
+    newGroupError.textContent = "";
+    newGroupMembersEl.innerHTML = "";
+
+    const users = [...state.users.values()].filter((u) => u.id !== state.userId);
+    if (users.length === 0) {
+      newGroupMembersEl.innerHTML = '<p style="color:var(--text-dim);font-size:12px;">لا يوجد مستخدمون آخرون مسجلون بعد</p>';
+    } else {
+      users.forEach((u) => {
+        const label = document.createElement("label");
+        label.className = "member-check-item";
+        label.innerHTML = `
+          <input type="checkbox" value="${u.id}" />
+          <span>${escapeHtml(u.username)}</span>
+        `;
+        newGroupMembersEl.appendChild(label);
+      });
+    }
+
+    newGroupModal.classList.remove("hidden");
+  });
+
+  newGroupCancelBtn.addEventListener("click", () => newGroupModal.classList.add("hidden"));
+
+  newGroupCreateBtn.addEventListener("click", async () => {
+    const name = newGroupNameInput.value.trim();
+    if (!name) {
+      newGroupError.textContent = "اسم المجموعة مطلوب";
+      return;
+    }
+
+    const memberIds = [];
+    newGroupMembersEl.querySelectorAll("input[type=checkbox]:checked").forEach((cb) => {
+      memberIds.push(Number(cb.value));
+    });
+
+    try {
+      const created = await api("/api/groups", {
+        method: "POST",
+        body: { name, member_ids: memberIds },
+      });
+      state.groups.set(created.id, created);
+      renderGroupsList();
+      newGroupModal.classList.add("hidden");
+      selectChat("group", created.id);
+    } catch (err) {
+      newGroupError.textContent = err.message;
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // نقطة البداية التلقائية (Auto-login check)
   // -----------------------------------------------------------------------
 
   if (state.token && state.userId) {
