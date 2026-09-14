@@ -1,14 +1,7 @@
 """
 database.py
 ------------
-طبقة الوصول لقاعدة البيانات (SQLite عبر aiosqlite).
-
-تحسين كفاءة مهم عن النسخة السابقة:
-    كنا نفتح اتصال جديد (aiosqlite.connect) في كل استعلام، وهذا مكلف
-    (فتح/إغلاق ملف db كل مرة). الآن نفتح اتصالًا واحدًا فقط عند إقلاع
-    السيرفر ونعيد استخدامه لكل الاستعلامات. aiosqlite يشغّل كل اتصال على
-    Thread مخصص له ويُسلسل العمليات عليه تلقائيًا، فهذا آمن حتى مع تعدد
-    المستخدمين المتزامنين، وأسرع بكثير من فتح اتصال جديد في كل مرة.
+[Model] طبقة الوصول لقاعدة البيانات وإدارة الجداول والبيانات الدائمة (SQLite عبر aiosqlite).
 """
 
 import os
@@ -17,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 import aiosqlite
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DB_PATH = os.path.join(BASE_DIR, "database", "chat.db")
 
 _db: Optional[aiosqlite.Connection] = None
@@ -270,7 +263,6 @@ async def create_group(name: str, created_by: int, member_ids: List[int]) -> int
     )
     group_id = cursor.lastrowid
 
-    # المُنشئ نفسه عضو دائمًا، حتى لو نسي إضافة نفسه في القائمة
     all_members = set(member_ids) | {created_by}
     now = _now()
     await _conn().executemany(
@@ -363,7 +355,7 @@ async def get_group_message_history(group_id: int, limit: int = 200) -> List[Dic
 
 
 # ---------------------------------------------------------------------------
-# مكالمات المجموعات (سجل تاريخي فقط — القائمة الحيّة تُدار في الذاكرة)
+# مكالمات المجموعات (سجل تاريخي فقط)
 # ---------------------------------------------------------------------------
 
 async def create_group_call(group_id: int, started_by: int) -> int:

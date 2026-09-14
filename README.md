@@ -66,6 +66,47 @@
 
 ---
 
+## 🏛️ معمارية المشروع (MVC Architecture)
+
+تمت إعادة هيكلة المشروع وفق معمارية **Model-View-Controller (MVC)** المتوافقة مع تطبيقات الويب الحديثة (FastAPI + SPA):
+
+```text
+LAN-VOICE-CHAT/
+│
+├── backend/
+│   ├── models/                   # [M - Models]
+│   │   ├── schemas.py            # نماذج Pydantic للتحقق من البيانات
+│   │   └── database.py           # طبقة الوصول لقاعدة البيانات SQLite
+│   │
+│   ├── controllers/              # [C - Controllers]
+│   │   ├── auth_controller.py    # مسارات المصادقة والتسجيل
+│   │   ├── users_controller.py   # مسارات المستخدمين والرسائل الخاصة
+│   │   ├── groups_controller.py  # مسارات المجموعات والمحادثات الجماعية
+│   │   ├── calls_controller.py   # مسارات استعلام سجل المكالمات
+│   │   └── ws_controller.py      # متحكم WebSocket وإشارات WebRTC
+│   │
+│   ├── services/                 # [Services / Business Logic]
+│   │   ├── call_manager.py       # إدارة آلة حالات المكالمات الثنائية
+│   │   ├── group_call_manager.py # إدارة المكالمات الجماعية
+│   │   ├── connection_manager.py # إدارة اتصالات المقابس النشطة
+│   │   ├── auth_service.py       # خدمات التشفير والتوكنات
+│   │   ├── certs_service.py      # توليد شهادات SSL ديناميكياً
+│   │   └── discovery_service.py  # خدمة الاكتشاف UDP Broadcast
+│   │
+│   ├── main.py                   # تجميع التطبيق وتسجيل المتحكمات
+│   └── run.py                    # نقطة الانطلاق الأساسية (HTTPS Runner)
+│
+├── views/                        # [V - Views] طبقة العرض وواجهة المستخدم (SPA مع معمارية MVC في العميل)
+│   ├── index.html                # صفحة العرض الرئيسية
+│   ├── style.css                 # تصميم الواجهة وأنظمة الألوان (Dark/Light)
+│   └── app.js                    # منطق العميل المُنظَّم كمعمارية MVC (Models, Views, Controllers)
+│
+├── requirements.txt
+└── README.md
+```
+
+---
+
 ## 🚀 التشغيل (Running)
 
 لتشغيل السيرفر مع تفعيل HTTPS تلقائياً (وهو الوضع المطلوب لعمل الكاميرا والميكروفون من مختلف أجهزة الشبكة):

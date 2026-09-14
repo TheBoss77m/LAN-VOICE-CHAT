@@ -1,11 +1,11 @@
 """
-models.py
----------
-نماذج Pydantic المستخدمة في طلبات/ردود الـ REST API.
+schemas.py
+----------
+[Model] نماذج البيانات والتحقق (Pydantic Models) الخاصة بطلبات وردود REST API.
 """
 
+from typing import Optional, List
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class RegisterRequest(BaseModel):
@@ -41,7 +41,7 @@ class MessageOut(BaseModel):
 
 class CreateGroupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=50)
-    member_ids: list[int] = Field(default_factory=list)
+    member_ids: List[int] = Field(default_factory=list)
 
 
 class GroupOut(BaseModel):
@@ -76,4 +76,3 @@ class CallOut(BaseModel):
     start_time: str
     end_time: Optional[str] = None
     status: str
-

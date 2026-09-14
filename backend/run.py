@@ -3,8 +3,8 @@ import sys
 
 import uvicorn
 
-from certs import ensure_certificate, OpenSSLNotFoundError
-from discovery import get_local_ip
+from services.certs_service import ensure_certificate, OpenSSLNotFoundError
+from services.discovery_service import get_local_ip
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CERT_DIR = os.path.join(BASE_DIR, "certs")

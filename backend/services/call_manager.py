@@ -1,9 +1,7 @@
 """
 call_manager.py
 ---------------
-إدارة الحالة اللحظية (In-Memory State) للمكالمات الثنائية (1:1 Voice & Video Calls).
-يتتبع المستخدمين المنخرطين في مكالمات نشطة لمنع التضارب وحالات انشغال الخط (Busy)
-وتنظيف المكالمات تلقائيًا عند انقطاع الاتصال المفاجئ.
+[Service] إدارة الحالة اللحظية (In-Memory State) للمكالمات الثنائية (1:1 Voice & Video Calls).
 """
 
 from typing import Dict, Optional, Any
@@ -19,11 +17,9 @@ class CallState:
 
 class CallManager:
     def __init__(self) -> None:
-        # user_id -> call session info dict
         self._user_calls: Dict[int, Dict[str, Any]] = {}
 
     def is_in_call(self, user_id: int) -> bool:
-        """يتحقق مما إذا كان المستخدم في مكالمة حاليًا (رنين أو اتصال نشط)."""
         return user_id in self._user_calls
 
     def get_call(self, user_id: int) -> Optional[Dict[str, Any]]:
@@ -32,7 +28,6 @@ class CallManager:
     def register_call(
         self, caller_id: int, receiver_id: int, call_id: int, call_type: str = "voice"
     ) -> None:
-        """تسجيل بدء محاولة اتصال بين طرفين."""
         session = {
             "call_id": call_id,
             "caller_id": caller_id,
@@ -44,7 +39,6 @@ class CallManager:
         self._user_calls[receiver_id] = {**session, "state": CallState.RINGING}
 
     def set_connected(self, user_id: int) -> None:
-        """تحديث حالة المكالمة إلى متصل للطرفين."""
         session = self._user_calls.get(user_id)
         if not session:
             return
@@ -57,7 +51,6 @@ class CallManager:
             self._user_calls[receiver_id]["state"] = CallState.CONNECTED
 
     def end_call(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """إنهاء المكالمة وإزالة الطرفين من التتبع، ويرجع معلومات المكالمة المنتهية."""
         session = self._user_calls.pop(user_id, None)
         if not session:
             return None
@@ -75,7 +68,6 @@ class CallManager:
         }
 
     def handle_disconnect(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """معالجة انقطاع اتصال أحد الطرفين أثناء مكالمة جارية."""
         return self.end_call(user_id)
 
 

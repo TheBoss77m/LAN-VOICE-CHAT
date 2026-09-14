@@ -1,39 +1,24 @@
 """
-ws_routes.py
-------------
-نقطة اتصال WebSocket الوحيدة (/ws?token=...). تتعامل مع أربعة أنواع من التفاعل:
-
-  1. حالة الاتصال (Online/Offline).
-  2. رسائل نصية ثنائية (chat_message).
-  3. رسائل نصية جماعية (group_message).
-  4. إشارات WebRTC (Signaling فقط):
-       - مكالمة ثنائية: call_offer / call_answer / ice_candidate / call_reject / call_end
-       - مكالمة جماعية (Mesh): group_call_join / group_call_leave / group_call_invite
-         بالإضافة لإعادة استخدام نفس رسائل call_offer/call_answer/ice_candidate
-         (لأن كل اتصال داخل المكالمة الجماعية هو، تقنيًا، اتصال WebRTC ثنائي
-         منفصل بين كل شخصين — هذا ما يُعرف بترتيب Mesh).
-
-ملاحظة عن حدود Mesh: كل مشارك يفتح اتصالًا مباشرًا مع كل مشارك آخر، فحمل
-المعالجة والشبكة يزداد مع (عدد المشاركين). هذا ممتاز على شبكة محلية بعدد
-صغير (حتى 6-8 أشخاص تقريبًا)، لكن لأعداد أكبر يحتاج المشروع لاحقًا خادم
-وسيط لتوزيع الوسائط (SFU) — خارج نطاق هذا المشروع الدراسي.
+ws_controller.py
+----------------
+[Controller] متحكم WebSocket الرئيسي لإشارات WebRTC والدردشة المباشرة وحالة التواجد.
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
-import auth
-import database as db
-from connection_manager import manager
-from group_call_manager import group_call_manager
-from call_manager import call_manager
+from services.auth_service import get_user_id_from_token
+from services.connection_manager import manager
+from services.group_call_manager import group_call_manager
+from services.call_manager import call_manager
+import models.database as db
 
-router = APIRouter()
+router = APIRouter(tags=["WebSocket"])
 
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(default=None)):
-    user_id = auth.get_user_id_from_token(token) if token else None
+    user_id = get_user_id_from_token(token) if token else None
     if user_id is None:
         await websocket.close(code=4401)
         return
@@ -61,7 +46,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     except Exception:
         pass
     finally:
-        # معالجة قطع الاتصال المفاجئ: تحديث الحالة + الخروج من المكالمات الثنائية والجماعية
+        # معالجة قطع الاتصال المفاجئ
         manager.disconnect(user_id)
         await db.set_user_status(user_id, "offline")
         await manager.broadcast(
@@ -110,9 +95,7 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
     if not isinstance(msg_type, str):
         return
 
-    # ---------------------------------------------------------------
     # 1) رسالة نصية ثنائية
-    # ---------------------------------------------------------------
     if msg_type == "chat_message":
         receiver_id = data.get("to")
         text = (data.get("message") or "").strip()
@@ -132,16 +115,14 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
         await manager.send_to(receiver_id, payload)
         await manager.send_to(sender_id, {**payload, "self_echo": True})
 
-    # ---------------------------------------------------------------
     # 2) رسالة نصية جماعية
-    # ---------------------------------------------------------------
     elif msg_type == "group_message":
         group_id = data.get("group_id")
         text = (data.get("message") or "").strip()
         if not group_id or not isinstance(group_id, int) or not text:
             return
         if not await db.is_group_member(group_id, sender_id):
-            return  # تجاهل صامت: مستخدم يحاول الكتابة بمجموعة ليس عضوًا فيها
+            return
 
         saved = await db.save_group_message(group_id, sender_id, text)
         payload = {
@@ -153,11 +134,9 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
             "timestamp": saved["timestamp"],
             "id": saved["id"],
         }
-        await _broadcast_to_group_members(group_id, payload)  # يشمل المرسل نفسه لتأكيد الاستلام
+        await _broadcast_to_group_members(group_id, payload)
 
-    # ---------------------------------------------------------------
     # 3) إشارات WebRTC — مكالمة ثنائية (صوت / فيديو) أو مكالمة جماعية (Mesh)
-    # ---------------------------------------------------------------
     elif msg_type == "call_offer":
         receiver_id = data.get("to")
         sdp = data.get("sdp")
@@ -168,7 +147,6 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
             return
 
         if not group_id:
-            # مكالمة ثنائية: فحص التوفر وحالة الانشغال
             if not manager.is_online(receiver_id):
                 await manager.send_to(
                     sender_id, {"type": "call_error", "reason": "user_offline", "peer": receiver_id}
@@ -218,7 +196,6 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
                     sender_id, {"type": "call_error", "reason": "user_offline", "peer": receiver_id}
                 )
         else:
-            # مكالمة جماعية (Mesh)
             await manager.send_to(
                 receiver_id,
                 {
@@ -289,9 +266,7 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
                 },
             )
 
-    # ---------------------------------------------------------------
-    # 4) المكالمات الجماعية — دعوة / انضمام / مغادرة
-    # ---------------------------------------------------------------
+    # 4) المكالمات الجماعية (Mesh)
     elif msg_type == "group_call_invite":
         group_id = data.get("group_id")
         if not group_id or not await db.is_group_member(group_id, sender_id):
@@ -312,7 +287,6 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
         if not group_id or not await db.is_group_member(group_id, sender_id):
             return
 
-        # المشاركون الموجودون قبل انضمام هذا المستخدم — هو من سيبدأ الاتصال بهم
         existing_participants = group_call_manager.get_participants(group_id)
 
         if not group_call_manager.is_active(group_id):
@@ -324,7 +298,6 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
         group_call_manager.join(group_id, sender_id, sender_username)
         await db.add_group_call_participant(call_id, sender_id)
 
-        # نرسل للمنضم الجديد قائمة من يجب أن يتصل بهم مباشرة
         await manager.send_to(
             sender_id,
             {
@@ -336,7 +309,6 @@ async def _handle_incoming(sender_id: int, sender_username: str, data: dict) -> 
                 ],
             },
         )
-        # نعلم البقية بوجود عضو جديد (لتحديث الواجهة فقط؛ الاتصال يبدأه المنضم الجديد)
         await _broadcast_to_group_members(
             group_id,
             {

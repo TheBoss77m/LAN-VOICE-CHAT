@@ -1,11 +1,7 @@
 """
-certs.py
---------
-يولّد شهادة HTTPS ذاتية التوقيع (Self-Signed) عند كل تشغيل للسيرفر.
-
-يدعم طريقتين تلقائيًا:
-  1. مكتبة cryptography (الأسرع والأضمن، تعمل على كل الأنظمة مباشرة دون الحاجة لأي أدوات خارجية).
-  2. أداة openssl عبر سطر الأوامر (كخيار بديل في حال عدم توفر مكتبة cryptography).
+certs_service.py
+----------------
+[Service] توليد شهادات SSL/HTTPS الذاتية لتمكين ميكروفون وكاميرا المتصفحات على أجهزة LAN.
 """
 
 import datetime
@@ -16,7 +12,7 @@ import subprocess
 import tempfile
 from typing import Tuple, Optional
 
-from discovery import get_local_ip
+from .discovery_service import get_local_ip
 
 
 class OpenSSLNotFoundError(RuntimeError):
@@ -24,12 +20,10 @@ class OpenSSLNotFoundError(RuntimeError):
 
 
 def _find_openssl_executable() -> Optional[str]:
-    """يبحث عن أداة openssl في مسار PATH أو في المسارات الشائعة على Windows."""
     found = shutil.which("openssl")
     if found:
         return found
 
-    # مسارات شائعة على Windows
     common_paths = [
         r"C:\Program Files\Git\usr\bin\openssl.exe",
         r"C:\Program Files (x86)\Git\usr\bin\openssl.exe",
@@ -49,7 +43,6 @@ def _generate_with_cryptography(cert_path: str, key_path: str, local_ip: str) ->
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives import serialization
 
-    # توليد مفتاح RSA 2048-bit
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
     subject = issuer = x509.Name([
@@ -144,20 +137,17 @@ def _generate_with_openssl(openssl_bin: str, cert_path: str, key_path: str, loca
 
 
 def ensure_certificate(cert_dir: str) -> Tuple[str, str]:
-    """يولّد شهادة ومفتاح جديدين في cert_dir، ويرجع مساراتهما."""
     os.makedirs(cert_dir, exist_ok=True)
     cert_path = os.path.join(cert_dir, "cert.pem")
     key_path = os.path.join(cert_dir, "key.pem")
     local_ip = get_local_ip()
 
-    # الطريقة الأولى: تجربة مكتبة cryptography
     try:
         _generate_with_cryptography(cert_path, key_path, local_ip)
         return cert_path, key_path
     except ImportError:
         pass
 
-    # الطريقة الثانية: البحث عن أداة openssl
     openssl_bin = _find_openssl_executable()
     if openssl_bin:
         _generate_with_openssl(openssl_bin, cert_path, key_path, local_ip)
@@ -165,6 +155,6 @@ def ensure_certificate(cert_dir: str) -> Tuple[str, str]:
 
     raise OpenSSLNotFoundError(
         "تعذر توليد شهادة HTTPS:\n"
-        "  1. ثبّت مكتبة cryptography: pip install cryptography (الخيار الموصى به)\n"
+        "  1. ثبّت مكتبة cryptography: pip install cryptography\n"
         "  2. أو ثبّت أداة openssl وأضفها إلى مسار PATH."
     )

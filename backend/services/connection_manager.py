@@ -1,7 +1,7 @@
 """
 connection_manager.py
 ----------------------
-يحتفظ بخريطة user_id -> WebSocket للمستخدمين المتصلين حاليًا،
+[Service] يحتفظ بخريطة user_id -> WebSocket للمستخدمين المتصلين حاليًا،
 ويوفر دوال إرسال مباشرة (unicast) وبث عام (broadcast).
 """
 
@@ -31,7 +31,6 @@ class ConnectionManager:
             await ws.send_json(data)
             return True
         except Exception:
-            # الاتصال قد يكون تعطّل للتو
             self.disconnect(user_id)
             return False
 
@@ -45,5 +44,4 @@ class ConnectionManager:
                 self.disconnect(user_id)
 
 
-# نسخة واحدة مشتركة تُستخدم في كل التطبيق
 manager = ConnectionManager()

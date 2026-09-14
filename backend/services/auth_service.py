@@ -1,9 +1,7 @@
 """
-auth.py
--------
-مصادقة بسيطة مناسبة لمشروع دراسي على شبكة محلية:
-- تشفير كلمة المرور بـ PBKDF2 (بدون مكتبات خارجية إضافية).
-- توكنات دخول تُحفظ في الذاكرة (تُمسح عند إعادة تشغيل السيرفر، وهذا مقبول لمشروعنا).
+auth_service.py
+---------------
+[Service] تشفير كلمات المرور وإدارة توكنات الجلسات للمستخدمين.
 """
 
 import hashlib
@@ -11,15 +9,15 @@ import os
 import secrets
 from typing import Dict, Optional
 
-# ---------------------------------------------------------------------------
-# كلمات المرور
-# ---------------------------------------------------------------------------
-
 _ITERATIONS = 100_000
+
+# token -> user_id
+_TOKENS: Dict[str, int] = {}
+# user_id -> token
+_USER_TOKENS: Dict[int, str] = {}
 
 
 def hash_password(password: str) -> str:
-    """يرجع نص واحد بصيغة salt$hash عشان نخزنه بعمود واحد."""
     salt = os.urandom(16)
     derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _ITERATIONS)
     return f"{salt.hex()}${derived.hex()}"
@@ -36,18 +34,7 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return secrets.compare_digest(derived, expected)
 
 
-# ---------------------------------------------------------------------------
-# التوكنات (في الذاكرة)
-# ---------------------------------------------------------------------------
-
-# token -> user_id
-_TOKENS: Dict[str, int] = {}
-# user_id -> token (لإبطال التوكن القديم عند تسجيل دخول جديد لنفس المستخدم)
-_USER_TOKENS: Dict[int, str] = {}
-
-
 def create_token(user_id: int) -> str:
-    # لو عنده توكن سابق نلغيه (تسجيل دخول واحد نشط في نفس اللحظة لكل مستخدم)
     old_token = _USER_TOKENS.get(user_id)
     if old_token:
         _TOKENS.pop(old_token, None)

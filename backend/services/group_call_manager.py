@@ -1,22 +1,15 @@
 """
 group_call_manager.py
 ----------------------
-يتتبع من هو "داخل" مكالمة جماعية معينة الآن (Roster حيّ)، بشكل منفصل عن
-قاعدة البيانات — لأن هذا نوع من الحالة اللحظية (Ephemeral State) لا يحتاج
-تخزين دائم، تمامًا مثل ConnectionManager.
-
-قاعدة البيانات (جدولا group_calls و group_call_participants) تحتفظ فقط
-بسجل تاريخي: متى بدأت المكالمة، من شارك، ومتى انتهت.
+[Service] يتتبع من هو "داخل" مكالمة جماعية معينة الآن (Roster حيّ).
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 
 
 class GroupCallManager:
     def __init__(self) -> None:
-        # group_id -> {user_id: username}
         self.rosters: Dict[int, Dict[int, str]] = {}
-        # group_id -> رقم المكالمة الحالي في قاعدة البيانات
         self.active_call_id: Dict[int, int] = {}
 
     def is_active(self, group_id: int) -> bool:
@@ -36,7 +29,6 @@ class GroupCallManager:
         self.rosters.setdefault(group_id, {})[user_id] = username
 
     def leave(self, group_id: int, user_id: int) -> bool:
-        """يحذف المستخدم من القائمة. يرجع True لو أصبحت المكالمة فارغة تمامًا."""
         roster = self.rosters.get(group_id)
         if roster:
             roster.pop(user_id, None)
@@ -46,9 +38,7 @@ class GroupCallManager:
             self.active_call_id.pop(group_id, None)
         return is_empty
 
-    def leave_all_groups_for_user(self, user_id: int):
-        """يُستدعى عند قطع اتصال WebSocket بالكامل (خروج/انقطاع مفاجئ).
-        يرجع قائمة [(group_id, call_id, أصبحت_فارغة)] لكل مجموعة كان بها."""
+    def leave_all_groups_for_user(self, user_id: int) -> List[Tuple[int, Optional[int], bool]]:
         results = []
         for group_id in list(self.rosters.keys()):
             if user_id in self.rosters.get(group_id, {}):
